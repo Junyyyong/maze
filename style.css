@@ -1,1 +1,226 @@
-/* Add styles here */
+:root {
+    --bg-color: #0b0c10;
+    --primary-color: #45a29e;
+    --neon-green: #66fcf1;
+    --neon-red: #ff383f;
+    --neon-yellow: #f8e71c;
+    --text-color: #c5c6c7;
+    --font-head: 'Black Han Sans', sans-serif;
+    --font-mono: 'Roboto Mono', monospace;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-mono);
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.screen {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.5s ease;
+}
+
+.hidden {
+    display: none !important;
+}
+
+h1.glitch {
+    font-family: var(--font-head);
+    font-size: 5rem;
+    color: var(--neon-green);
+    text-shadow: 0 0 10px var(--neon-green), 0 0 20px var(--neon-green);
+    position: relative;
+    letter-spacing: 5px;
+    animation: flicker 1.5s infinite alternate;
+}
+
+@keyframes flicker {
+    0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+        text-shadow:
+        0 0 5px var(--neon-green),
+        0 0 10px var(--neon-green),
+        0 0 20px var(--neon-green),
+        0 0 40px var(--primary-color),
+        0 0 80px var(--primary-color);
+    }
+    20%, 24%, 55% {
+        text-shadow: none;
+    }
+}
+
+.subtitle {
+    font-size: 1.2rem;
+    margin-bottom: 2rem;
+    color: var(--neon-red);
+}
+
+.input-group, .settings {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+    width: 300px;
+}
+
+label {
+    margin-bottom: 5px;
+    color: var(--primary-color);
+    font-weight: bold;
+}
+
+input[type="text"] {
+    padding: 10px;
+    background: transparent;
+    border: 2px solid var(--primary-color);
+    color: var(--neon-green);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    outline: none;
+}
+
+input[type="range"] {
+    width: 100%;
+}
+
+.cyber-btn {
+    background: transparent;
+    border: 2px solid var(--neon-green);
+    color: var(--neon-green);
+    padding: 15px 40px;
+    font-size: 1.5rem;
+    font-family: var(--font-head);
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.3s ease;
+    box-shadow: 0 0 10px var(--neon-green);
+    margin-top: 20px;
+}
+
+.cyber-btn:hover {
+    background: var(--neon-green);
+    color: var(--bg-color);
+    box-shadow: 0 0 20px var(--neon-green);
+}
+
+/* GAME SCREEN */
+#game-screen {
+    justify-content: flex-start;
+    padding-top: 20px;
+}
+
+.header {
+    width: 90%;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 1.2rem;
+    border-bottom: 1px solid var(--primary-color);
+    padding-bottom: 10px;
+}
+
+.main-content {
+    display: flex;
+    width: 95%;
+    height: 80%;
+    gap: 20px;
+}
+
+#maze-canvas {
+    border: 2px solid var(--primary-color);
+    box-shadow: 0 0 15px var(--primary-color);
+    background-color: #000;
+    flex-grow: 1; 
+    max-width: 75%; /* 캔버스가 너무 커지는 것 방지 */
+}
+
+.sidebar {
+    width: 25%;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    height: 100%;
+}
+
+.leaderboard, .finished-board, .log-panel {
+    background: rgba(69, 162, 158, 0.1);
+    border: 1px solid var(--primary-color);
+    padding: 10px;
+    border-radius: 5px;
+    overflow-y: auto;
+}
+
+.leaderboard {
+    height: 30%;
+    border-color: var(--neon-red);
+}
+
+.finished-board {
+    height: 30%;
+    border-color: var(--neon-green);
+}
+
+.log-panel {
+    height: 40%;
+    font-size: 0.8rem;
+    color: #aaa;
+    display: flex;
+    flex-direction: column-reverse; /* 최신 로그가 아래에 쌓이도록 */
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+li {
+    padding: 5px;
+    margin-bottom: 5px;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.player-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+}
+
+#restart-btn {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    z-index: 100;
+    font-size: 1rem;
+    padding: 10px 20px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .main-content {
+        flex-direction: column;
+    }
+    #maze-canvas {
+        max-width: 100%;
+        height: 50vh;
+    }
+    .sidebar {
+        width: 100%;
+        height: 40vh;
+    }
+}

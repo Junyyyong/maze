@@ -1,14 +1,60 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello World</title>
-  <link href='/style.css' rel='stylesheet'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>배틀 메이즈: 꼴등이 당첨!</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>Hello, world!</h1>
-  <button onclick="console.log('hello');">Press me</button>
-  <script defer type="text/javascript" src="/main.js"></script>
+
+    <div id="setup-screen" class="screen">
+        <h1 class="glitch" data-text="MAZE RACE">MAZE RACE</h1>
+        <p class="subtitle">가장 늦게 탈출하는 사람이 당첨입니다.</p>
+        
+        <div class="input-group">
+            <label>참가자 이름 (쉼표로 구분)</label>
+            <input type="text" id="player-input" placeholder="예: 철수, 영희, 민수, 짱구" value="철수, 영희, 민수, 짱구">
+        </div>
+
+        <div class="settings">
+            <label>맵 복잡도</label>
+            <input type="range" id="difficulty" min="10" max="40" value="25">
+        </div>
+
+        <button id="start-btn" class="cyber-btn">RACE START</button>
+    </div>
+
+    <div id="game-screen" class="screen hidden">
+        <div class="header">
+            <div class="status-bar">
+                <span>남은 인원: <b id="survivor-count">0</b></span>
+                <span id="game-message">RACE IN PROGRESS...</span>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <canvas id="maze-canvas"></canvas>
+            
+            <div class="sidebar">
+                <div class="leaderboard">
+                    <h3>🔴 생존자 (탈출 전)</h3>
+                    <ul id="active-list"></ul>
+                </div>
+                <div class="finished-board">
+                    <h3>🏁 탈출 성공 (세이프)</h3>
+                    <ul id="finished-list"></ul>
+                </div>
+                <div class="log-panel" id="log-panel">
+                    <div class="log-entry">게임 준비 완료...</div>
+                </div>
+            </div>
+        </div>
+        
+        <button id="restart-btn" class="cyber-btn hidden">다시 하기</button>
+    </div>
+
+    <script src="main.js"></script>
 </body>
 </html>
