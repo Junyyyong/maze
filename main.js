@@ -11,8 +11,8 @@ const gameMessage = document.getElementById('game-message');
 const playerListSetup = document.getElementById('player-list-setup');
 const playerCountInput = document.getElementById('player-count');
 
-let audioCtx = null;
 const COLORS = ['#00f2ff', '#39ff14', '#bc13fe', '#ff383f', '#f8e71c', '#ff9d00', '#00ffff', '#ffffff'];
+const RANDOM_NAMES = ["Neo", "Trinity", "Morpheus", "Cypher", "Tank", "Dozer", "Mouse", "Switch", "Ghost", "Niobe", "Oracle", "Smith"];
 
 let config = { cellSize: 10, width: 41, height: 41, shape: 'rect' };
 let state = {
@@ -31,23 +31,33 @@ const bgCtx = bgCanvas.getContext('2d');
 // --- Setup UI Logic ---
 function adjustPlayerCount(delta) {
     let val = parseInt(playerCountInput.value) + delta;
-    val = Math.max(2, Math.min(8, val));
+    val = Math.max(2, Math.min(12, val)); // Increased max to 12
     playerCountInput.value = val;
     renderPlayerSetup();
 }
 
 function renderPlayerSetup() {
     const count = parseInt(playerCountInput.value);
+    const currentInputs = document.querySelectorAll('.player-name-input');
+    const existingNames = Array.from(currentInputs).map(input => input.value);
+    
     playerListSetup.innerHTML = '';
     for (let i = 0; i < count; i++) {
         const div = document.createElement('div');
         div.className = 'player-setup-card';
+        const defaultName = existingNames[i] || RANDOM_NAMES[i % RANDOM_NAMES.length] + " " + (Math.floor(i / RANDOM_NAMES.length) || "");
         div.innerHTML = `
             <div class="color-dot" style="background: ${COLORS[i % COLORS.length]}"></div>
-            <input type="text" class="player-name-input" value="Runner ${i + 1}">
+            <input type="text" class="player-name-input" value="${defaultName.trim()}">
+            <button class="btn-mini" onclick="randomizeName(this)"><i class="fas fa-dice"></i></button>
         `;
         playerListSetup.appendChild(div);
     }
+}
+
+function randomizeName(btn) {
+    const input = btn.parentElement.querySelector('.player-name-input');
+    input.value = RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
 }
 
 renderPlayerSetup();
@@ -153,8 +163,8 @@ function generateMaze(w, h, shape) {
     const center = {x: Math.floor(w/2), y: Math.floor(h/2)};
 
     // Masking for different shapes
-    for(let y=0; y<h; y++) {
-        for(let x=0; x<w; x++) {
+    for(let y = 0; y < h; y++) {
+        for(let x = 0; x < w; x++) {
             if (shape === 'circle') {
                 if (Math.sqrt((x-center.x)**2 + (y-center.y)**2) > w/2 - 1) map[y][x] = -1;
             } else if (shape === 'diamond') {
@@ -304,7 +314,7 @@ function initGame() {
     const difficultyVal = parseInt(document.getElementById('difficulty').value);
     config.width = config.height = difficultyVal * 2 + 1;
     
-    // Choose random shape based on difficulty
+    // Choose random shape
     const shapes = ['rect', 'circle', 'diamond'];
     config.shape = shapes[Math.floor(Math.random() * shapes.length)];
 
@@ -323,14 +333,14 @@ function initGame() {
         for(let x=1; x<config.width-1; x++) {
             if(state.maze[y][x] === 0) {
                 const dist = Math.sqrt((x-exit.x)**2 + (y-exit.y)**2);
-                if(dist > config.width/3) validStarts.push({x,y});
+                if(dist > config.width/4) validStarts.push({x,y});
             }
         }
     }
 
     state.players = playerConfigs.map(c => {
         const startIdx = Math.floor(Math.random() * validStarts.length);
-        const s = validStarts.splice(startIdx, 1)[0];
+        const s = validStarts.splice(startIdx, 1)[0] || {x:1, y:1};
         return new Player(c.name, c.color, s, exit, state.maze);
     });
 
@@ -338,7 +348,7 @@ function initGame() {
     state.finishedCount = 0;
     state.running = true;
     logPanel.innerHTML = '';
-    addHistoryLog(`SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, var('--primary-color'));
+    addHistoryLog(`SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, '#00f2ff');
     
     preRenderMaze();
     activeList.innerHTML = '';
@@ -398,3 +408,4 @@ restartBtn.addEventListener('click', () => {
     restartBtn.classList.add('hidden');
 });
 window.adjustPlayerCount = adjustPlayerCount;
+window.randomizeName = randomizeName;
