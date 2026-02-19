@@ -3,43 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>네온 배틀 메이즈</title>
+    <title>NEON BATTLE MAZE</title>
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Orbitron:wght@400;700&family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
 
     <div id="setup-screen" class="screen">
-        <h1 class="glitch" data-text="NEON MAZE">NEON MAZE</h1>
-        <p class="subtitle">마지막까지 살아남는 자가 승리(또는 패배)합니다.</p>
+        <div class="setup-header">
+            <h1 class="glitch" data-text="NEON MAZE">NEON MAZE</h1>
+            <p class="subtitle"><i class="fas fa-microchip"></i> SYSTEM INITIALIZING...</p>
+        </div>
         
-        <div class="setup-container">
-            <div class="input-group">
-                <label>참가 인원</label>
+        <div class="setup-card">
+            <div class="setup-section">
+                <label><i class="fas fa-users"></i> PARTICIPANTS</label>
                 <div class="player-count-control">
-                    <button type="button" onclick="adjustPlayerCount(-1)">-</button>
+                    <button type="button" class="btn-round" onclick="adjustPlayerCount(-1)"><i class="fas fa-minus"></i></button>
                     <input type="number" id="player-count" value="4" min="2" max="8" readonly>
-                    <button type="button" onclick="adjustPlayerCount(1)">+</button>
+                    <button type="button" class="btn-round" onclick="adjustPlayerCount(1)"><i class="fas fa-plus"></i></button>
                 </div>
             </div>
 
             <div id="player-list-setup" class="player-grid">
-                <!-- 플레이어 설정 슬롯이 여기에 동적으로 생성됨 -->
+                <!-- Players generated here -->
             </div>
 
-            <div class="settings">
-                <label>미로 복잡도</label>
-                <input type="range" id="difficulty" min="10" max="30" value="20">
+            <div class="setup-section full-width">
+                <label><i class="fas fa-layer-group"></i> COMPLEXITY & SCALE</label>
+                <div class="range-container">
+                    <i class="fas fa-easy"></i>
+                    <input type="range" id="difficulty" min="10" max="50" value="25">
+                    <i class="fas fa-hard-hat"></i>
+                </div>
             </div>
 
-            <button id="start-btn" class="cyber-btn">SYSTEM INITIALIZE</button>
+            <button id="start-btn" class="cyber-btn-large">
+                <i class="fas fa-play"></i> INITIATE RACE
+            </button>
         </div>
     </div>
 
     <div id="game-screen" class="screen hidden">
         <div class="header">
-            <div class="status-bar">
-                <span>STATUS: <b id="game-message">RACING...</b></span>
+            <div class="neon-badge">
+                <i class="fas fa-broadcast-tower"></i> <span id="game-message">CONNECTING...</span>
             </div>
         </div>
 
@@ -49,19 +59,26 @@
             </div>
             
             <div class="sidebar">
-                <div class="panel">
-                    <h3>⚡ RUNNERS STATUS</h3>
+                <div class="panel runner-panel">
+                    <h3><i class="fas fa-running"></i> ACTIVE RUNNERS</h3>
                     <ul id="active-list"></ul>
                 </div>
-                <div class="panel">
-                    <h3>🏁 FINISH LINE</h3>
+                
+                <div class="panel finish-panel">
+                    <h3><i class="fas fa-flag-checkered"></i> FINISH LINE</h3>
                     <ul id="finished-list"></ul>
                 </div>
-                <div class="panel log-panel" id="log-panel"></div>
+
+                <div class="panel history-panel">
+                    <h3><i class="fas fa-history"></i> LIVE LOG</h3>
+                    <div id="log-panel" class="log-content"></div>
+                </div>
             </div>
         </div>
         
-        <button id="restart-btn" class="cyber-btn hidden">REBOOT</button>
+        <button id="restart-btn" class="cyber-btn hidden">
+            <i class="fas fa-redo"></i> REBOOT
+        </button>
     </div>
 
     <script src="main.js"></script>

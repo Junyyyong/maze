@@ -14,12 +14,11 @@ const playerCountInput = document.getElementById('player-count');
 let audioCtx = null;
 const COLORS = ['#00f2ff', '#39ff14', '#bc13fe', '#ff383f', '#f8e71c', '#ff9d00', '#00ffff', '#ffffff'];
 
-let config = { cellSize: 10, width: 41, height: 41 };
+let config = { cellSize: 10, width: 41, height: 41, shape: 'rect' };
 let state = {
     players: [],
     maze: [],
-    items: [], // {x, y, type: 'boost' | 'slow'}
-    particles: [],
+    items: [], 
     floatingTexts: [],
     running: false,
     finishedCount: 0,
@@ -29,7 +28,7 @@ let state = {
 const bgCanvas = document.createElement('canvas');
 const bgCtx = bgCanvas.getContext('2d');
 
-// --- 초기 설정 UI 관련 ---
+// --- Setup UI Logic ---
 function adjustPlayerCount(delta) {
     let val = parseInt(playerCountInput.value) + delta;
     val = Math.max(2, Math.min(8, val));
@@ -45,23 +44,22 @@ function renderPlayerSetup() {
         div.className = 'player-setup-card';
         div.innerHTML = `
             <div class="color-dot" style="background: ${COLORS[i % COLORS.length]}"></div>
-            <input type="text" class="player-name-input" value="Runner ${i + 1}" placeholder="이름 입력">
+            <input type="text" class="player-name-input" value="Runner ${i + 1}">
         `;
         playerListSetup.appendChild(div);
     }
 }
 
-// 초기 로드 시 실행
 renderPlayerSetup();
 
-// --- 게임 로직 ---
+// --- Core Game Classes ---
 class Player {
     constructor(name, color, startPos, endPos, mazeData) {
         this.name = name;
         this.color = color;
         this.path = solveMaze(mazeData, startPos, endPos);
         this.currentIdx = 0;
-        this.baseSpeed = 0.15 + Math.random() * 0.1;
+        this.baseSpeed = 0.12 + Math.random() * 0.08;
         this.speed = this.baseSpeed;
         this.state = 'RUN';
         this.timer = 0;
@@ -73,7 +71,6 @@ class Player {
     update() {
         if (this.finished) return;
 
-        // 타일 체크 (아이템/장애물)
         const cellX = Math.floor(this.x / config.cellSize);
         const cellY = Math.floor(this.y / config.cellSize);
         const item = state.items.find(it => it.x === cellX && it.y === cellY);
@@ -81,13 +78,15 @@ class Player {
         if (item && this.state === 'RUN') {
             if (item.type === 'boost') {
                 this.state = 'BOOST';
-                this.speed = 0.6;
+                this.speed = 0.5;
                 this.timer = 30;
-                spawnFloatingText(this.x, this.y, "⚡ SPEED UP", this.color);
+                addHistoryLog(`${this.name}: SPEED BOOST ACTIVATED`, this.color);
+                spawnFloatingText(this.x, this.y, "⚡ BOOST", this.color);
             } else if (item.type === 'slow') {
                 this.state = 'SLOW';
-                this.speed = 0.05;
-                this.timer = 40;
+                this.speed = 0.04;
+                this.timer = 45;
+                addHistoryLog(`${this.name}: TRAPPED IN SLOW ZONE`, '#bc13fe');
                 spawnFloatingText(this.x, this.y, "🕸️ SLOW", '#bc13fe');
             }
         }
@@ -100,12 +99,13 @@ class Player {
             }
         }
 
-        // 랜덤 기절 (긴장감)
-        if (this.state === 'RUN' && Math.random() < 0.002) {
+        // Random Glitch (Stun)
+        if (this.state === 'RUN' && Math.random() < 0.0015) {
             this.state = 'STUN';
             this.speed = 0;
-            this.timer = 60;
-            spawnFloatingText(this.x, this.y, "💫 STUNNED", '#fff');
+            this.timer = 70;
+            addHistoryLog(`${this.name}: SYSTEM GLITCH (STUNNED)`, '#fff');
+            spawnFloatingText(this.x, this.y, "💫 GLITCH", '#fff');
         }
 
         this.currentIdx += this.speed;
@@ -129,16 +129,80 @@ class Player {
     draw(ctx) {
         ctx.save();
         if (this.state === 'BOOST') {
-            ctx.shadowBlur = 15;
+            ctx.shadowBlur = 20;
             ctx.shadowColor = this.color;
         }
         ctx.fillStyle = this.color;
         if (this.finished) ctx.globalAlpha = 0.2;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, config.cellSize/2, 0, Math.PI*2);
+        ctx.arc(this.x, this.y, config.cellSize/1.8, 0, Math.PI*2);
+        ctx.fill();
+        
+        // Core highlight
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, config.cellSize/4, 0, Math.PI*2);
         ctx.fill();
         ctx.restore();
     }
+}
+
+// --- Maze Engine ---
+function generateMaze(w, h, shape) {
+    const map = Array.from({length: h}, () => Array(w).fill(1));
+    const center = {x: Math.floor(w/2), y: Math.floor(h/2)};
+
+    // Masking for different shapes
+    for(let y=0; y<h; y++) {
+        for(let x=0; x<w; x++) {
+            if (shape === 'circle') {
+                if (Math.sqrt((x-center.x)**2 + (y-center.y)**2) > w/2 - 1) map[y][x] = -1;
+            } else if (shape === 'diamond') {
+                if (Math.abs(x-center.x) + Math.abs(y-center.y) > w/2 - 1) map[y][x] = -1;
+            }
+        }
+    }
+
+    let start = {x: 1, y: 1};
+    if (map[1][1] === -1) {
+        // Find nearest valid start
+        outer: for(let y=1; y<h-1; y++) {
+            for(let x=1; x<w-1; x++) {
+                if(map[y][x] === 1) { start = {x, y}; break outer; }
+            }
+        }
+    }
+
+    map[start.y][start.x] = 0;
+    const stack = [start];
+    
+    while(stack.length) {
+        const cur = stack[stack.length-1];
+        const nbs = [];
+        for(let d of [{x:0,y:-2},{x:0,y:2},{x:-2,y:0},{x:2,y:0}]) {
+            const nx=cur.x+d.x, ny=cur.y+d.y;
+            if(nx>0 && nx<w-1 && ny>0 && ny<h-1 && map[ny][nx]===1) 
+                nbs.push({x:nx, y:ny, dx:d.x/2, dy:d.y/2});
+        }
+        if(nbs.length) {
+            const next = nbs[Math.floor(Math.random()*nbs.length)];
+            map[next.y][next.x] = 0;
+            map[cur.y+next.dy][cur.x+next.dx] = 0;
+            stack.push({x:next.x, y:next.y});
+        } else stack.pop();
+    }
+
+    // Populate items
+    state.items = [];
+    const itemCount = (w * h) * 0.04;
+    for(let i=0; i<itemCount; i++) {
+        const rx = Math.floor(Math.random()*w);
+        const ry = Math.floor(Math.random()*h);
+        if(map[ry][rx] === 0 && (rx !== center.x || ry !== center.y)) {
+            state.items.push({x:rx, y:ry, type: Math.random() > 0.4 ? 'boost' : 'slow'});
+        }
+    }
+    return map;
 }
 
 function solveMaze(map, start, end) {
@@ -159,40 +223,7 @@ function solveMaze(map, start, end) {
     return [start];
 }
 
-function generateMaze(w, h) {
-    const map = Array.from({length: h}, () => Array(w).fill(1));
-    const stack = [{x:1, y:1}];
-    map[1][1] = 0;
-    
-    while(stack.length) {
-        const cur = stack[stack.length-1];
-        const nbs = [];
-        for(let d of [{x:0,y:-2},{x:0,y:2},{x:-2,y:0},{x:2,y:0}]) {
-            const nx=cur.x+d.x, ny=cur.y+d.y;
-            if(nx>0 && nx<w-1 && ny>0 && ny<h-1 && map[ny][nx]===1) 
-                nbs.push({x:nx, y:ny, dx:d.x/2, dy:d.y/2});
-        }
-        if(nbs.length) {
-            const next = nbs[Math.floor(Math.random()*nbs.length)];
-            map[next.y][next.x] = 0;
-            map[cur.y+next.dy][cur.x+next.dx] = 0;
-            stack.push({x:next.x, y:next.y});
-        } else stack.pop();
-    }
-
-    // 아이템/장애물 배치
-    state.items = [];
-    for(let i=0; i<w*h*0.05; i++) {
-        const rx = Math.floor(Math.random()*w);
-        const ry = Math.floor(Math.random()*h);
-        if(map[ry][rx] === 0) {
-            state.items.push({x:rx, y:ry, type: Math.random() > 0.4 ? 'boost' : 'slow'});
-        }
-    }
-
-    return map;
-}
-
+// --- Rendering Logic ---
 function preRenderMaze() {
     bgCanvas.width = canvas.width;
     bgCanvas.height = canvas.height;
@@ -205,25 +236,28 @@ function preRenderMaze() {
             const cy = y * config.cellSize;
             
             if(state.maze[y][x] === 1) {
-                bgCtx.fillStyle = '#111';
+                bgCtx.fillStyle = '#11121a';
                 bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
-            } else {
-                // 아이템 바닥 그리기
+                bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                bgCtx.strokeRect(cx, cy, config.cellSize, config.cellSize);
+            } else if (state.maze[y][x] === 0) {
                 const item = state.items.find(it => it.x === x && it.y === y);
                 if(item) {
-                    bgCtx.fillStyle = item.type === 'boost' ? 'rgba(0, 242, 255, 0.2)' : 'rgba(188, 19, 254, 0.2)';
+                    bgCtx.fillStyle = item.type === 'boost' ? 'rgba(0, 242, 255, 0.15)' : 'rgba(188, 19, 254, 0.15)';
                     bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
                 }
             }
         }
     }
-    // 출구
+    // Target Portal
     const ex = Math.floor(config.width/2) * config.cellSize;
     const ey = Math.floor(config.height/2) * config.cellSize;
     bgCtx.fillStyle = '#bc13fe';
-    bgCtx.shadowBlur = 15;
+    bgCtx.shadowBlur = 20;
     bgCtx.shadowColor = '#bc13fe';
-    bgCtx.fillRect(ex, ey, config.cellSize, config.cellSize);
+    bgCtx.beginPath();
+    bgCtx.arc(ex + config.cellSize/2, ey + config.cellSize/2, config.cellSize/1.5, 0, Math.PI*2);
+    bgCtx.fill();
     bgCtx.shadowBlur = 0;
 }
 
@@ -231,16 +265,27 @@ function spawnFloatingText(x, y, text, color) {
     state.floatingTexts.push({ x, y, text, color, life: 1.0 });
 }
 
+function addHistoryLog(msg, color = '#fff') {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    div.style.borderLeftColor = color;
+    div.innerHTML = `<span style="color: ${color}">${msg}</span>`;
+    logPanel.appendChild(div);
+    logPanel.scrollTop = logPanel.scrollHeight;
+}
+
 function handleFinish(p) {
     state.finishedCount++;
-    state.cameraShake = 5;
+    state.cameraShake = 8;
+    addHistoryLog(`${p.name} REACHED FINISH! (#${state.finishedCount})`, p.color);
+    
     const li = document.createElement('li');
     li.innerHTML = `<span style="color:${p.color}">${p.name}</span> <b>#${state.finishedCount}</b>`;
     finishedList.appendChild(li);
 
     if (state.finishedCount === state.players.length - 1) {
         const loser = state.players.find(pl => !pl.finished);
-        gameMessage.innerText = `GAME OVER: ${loser.name} LOST`;
+        gameMessage.innerText = `TERMINATED: ${loser.name.toUpperCase()} LOST`;
         state.running = false;
         restartBtn.classList.remove('hidden');
     }
@@ -249,43 +294,56 @@ function handleFinish(p) {
 function initGame() {
     const nameInputs = document.querySelectorAll('.player-name-input');
     const playerConfigs = Array.from(nameInputs).map((input, i) => ({
-        name: input.value || `Runner ${i+1}`,
+        name: input.value.trim() || `RUNNER ${i+1}`,
         color: COLORS[i % COLORS.length]
     }));
 
     setupScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
 
-    const diff = parseInt(document.getElementById('difficulty').value);
-    config.width = config.height = diff * 2 + 1;
+    const difficultyVal = parseInt(document.getElementById('difficulty').value);
+    config.width = config.height = difficultyVal * 2 + 1;
     
-    // 비율 유지 리사이징
+    // Choose random shape based on difficulty
+    const shapes = ['rect', 'circle', 'diamond'];
+    config.shape = shapes[Math.floor(Math.random() * shapes.length)];
+
     const container = document.querySelector('.canvas-container');
-    const size = Math.min(container.clientWidth, container.clientHeight) - 20;
+    const size = Math.min(container.clientWidth, container.clientHeight) - 40;
     config.cellSize = Math.floor(size / config.width);
     canvas.width = canvas.height = config.width * config.cellSize;
 
-    state.maze = generateMaze(config.width, config.height);
+    state.maze = generateMaze(config.width, config.height, config.shape);
     const exit = {x: Math.floor(config.width/2), y: Math.floor(config.height/2)};
     state.maze[exit.y][exit.x] = 0;
 
+    // Pick unique start positions far from exit
+    const validStarts = [];
+    for(let y=1; y<config.height-1; y++) {
+        for(let x=1; x<config.width-1; x++) {
+            if(state.maze[y][x] === 0) {
+                const dist = Math.sqrt((x-exit.x)**2 + (y-exit.y)**2);
+                if(dist > config.width/3) validStarts.push({x,y});
+            }
+        }
+    }
+
     state.players = playerConfigs.map(c => {
-        let rx, ry;
-        do {
-            rx = Math.floor(Math.random()*config.width);
-            ry = Math.floor(Math.random()*config.height);
-        } while(state.maze[ry][rx] !== 0 || (rx === exit.x && ry === exit.y));
-        return new Player(c.name, c.color, {x:rx, y:ry}, exit, state.maze);
+        const startIdx = Math.floor(Math.random() * validStarts.length);
+        const s = validStarts.splice(startIdx, 1)[0];
+        return new Player(c.name, c.color, s, exit, state.maze);
     });
 
     state.floatingTexts = [];
     state.finishedCount = 0;
     state.running = true;
-    preRenderMaze();
+    logPanel.innerHTML = '';
+    addHistoryLog(`SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, var('--primary-color'));
     
+    preRenderMaze();
     activeList.innerHTML = '';
     finishedList.innerHTML = '';
-    gameMessage.innerText = "RACING...";
+    gameMessage.innerText = "SIGNAL ACQUIRED. RACING...";
     requestAnimationFrame(loop);
 }
 
@@ -299,20 +357,19 @@ function loop() {
 function update() {
     state.players.forEach(p => p.update());
     for(let i=state.floatingTexts.length-1; i>=0; i--) {
-        state.floatingTexts[i].life -= 0.02;
-        state.floatingTexts[i].y -= 0.5;
+        state.floatingTexts[i].life -= 0.025;
+        state.floatingTexts[i].y -= 0.4;
         if(state.floatingTexts[i].life <= 0) state.floatingTexts.splice(i, 1);
     }
-    if(state.cameraShake > 0) state.cameraShake *= 0.9;
+    if(state.cameraShake > 0) state.cameraShake *= 0.85;
 
-    // 실시간 상태 업데이트
     const survivors = state.players.filter(p => !p.finished).sort((a,b) => b.currentIdx - a.currentIdx);
     activeList.innerHTML = survivors.map(p => {
-        let badge = '';
-        if(p.state === 'BOOST') badge = '<span class="badge badge-boost">BOOST</span>';
-        if(p.state === 'STUN') badge = '<span class="badge badge-stun">STUN</span>';
-        if(p.state === 'SLOW') badge = '<span class="badge badge-slow">SLOW</span>';
-        return `<li><span style="color:${p.color}">${p.name}</span> <div>${badge} ${Math.floor((p.currentIdx/p.path.length)*100)}%</div></li>`;
+        let status = `<span style="color: #666">${Math.floor((p.currentIdx/p.path.length)*100)}%</span>`;
+        if(p.state === 'BOOST') status = '<span class="badge badge-boost">BOOST</span>';
+        if(p.state === 'STUN') status = '<span class="badge badge-stun">GLITCH</span>';
+        if(p.state === 'SLOW') status = '<span class="badge badge-slow">TRAPPED</span>';
+        return `<li><span style="color:${p.color}">● ${p.name}</span> <div>${status}</div></li>`;
     }).join('');
 }
 
@@ -327,9 +384,9 @@ function draw() {
     state.floatingTexts.forEach(t => {
         ctx.globalAlpha = t.life;
         ctx.fillStyle = t.color;
-        ctx.font = 'bold 12px Arial';
+        ctx.font = 'bold 11px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(t.text, t.x, t.y - 10);
+        ctx.fillText(t.text, t.x, t.y - 12);
     });
     ctx.restore();
 }
@@ -340,4 +397,4 @@ restartBtn.addEventListener('click', () => {
     setupScreen.classList.remove('hidden');
     restartBtn.classList.add('hidden');
 });
-window.adjustPlayerCount = adjustPlayerCount; // 전역 스코프 노출
+window.adjustPlayerCount = adjustPlayerCount;
