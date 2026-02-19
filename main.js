@@ -10,40 +10,39 @@ const logPanel = document.getElementById('log-panel');
 const survivorCountSpan = document.getElementById('survivor-count');
 const gameMessage = document.getElementById('game-message');
 
-// 설정값
 let CELL_SIZE = 10;
-let MAZE_WIDTH = 51; // 홀수여야 함
+let MAZE_WIDTH = 51;
 let MAZE_HEIGHT = 51;
 let players = [];
 let maze = [];
-let path = []; // 정답 경로
 let isGameRunning = false;
 let finishedCount = 0;
+let mazeShape = 'circle'; // 'circle', 'diamond', 'octagon'
 
 const COLORS = [
-    '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffa500', '#800080', '#008000', '#ffc0cb'
+    '#00f2ff', '#39ff14', '#bc13fe', '#ff073a', '#f8e71c', '#ff00ff', '#00ffff', '#ffa500', '#ffc0cb', '#ffffff'
 ];
 
 class Player {
-    constructor(name, color, path) {
+    constructor(name, color, startPos, endPos, mazeData) {
         this.name = name;
         this.color = color;
-        this.path = path; // 따라갈 경로 좌표 배열 [{x,y}, {x,y}...]
-        this.pathIndex = 0; // 현재 경로상 인덱스 (float)
-        this.speed = 0.3 + Math.random() * 0.2; // 기본 속도
-        this.baseSpeed = this.speed;
-        this.state = 'RUNNING'; // RUNNING, STUNNED, BOOST
+        this.path = solveMaze(mazeData, startPos, endPos);
+        this.pathIndex = 0;
+        this.baseSpeed = 0.2 + Math.random() * 0.2;
+        this.speed = this.baseSpeed;
+        this.state = 'RUNNING';
         this.stateTimer = 0;
         this.finished = false;
         this.finishTime = 0;
-        this.x = path[0].x * CELL_SIZE + CELL_SIZE/2;
-        this.y = path[0].y * CELL_SIZE + CELL_SIZE/2;
+        this.history = []; // 잔상을 위한 위치 기록
+        this.x = startPos.x * CELL_SIZE + CELL_SIZE/2;
+        this.y = startPos.y * CELL_SIZE + CELL_SIZE/2;
     }
 
     update() {
         if (this.finished) return;
 
-        // 상태 관리
         if (this.stateTimer > 0) {
             this.stateTimer--;
             if (this.stateTimer <= 0) {
@@ -52,30 +51,23 @@ class Player {
             }
         }
 
-        // 랜덤 이벤트 발생 (1% 확률)
-        if (this.state === 'RUNNING' && Math.random() < 0.01) {
+        if (this.state === 'RUNNING' && Math.random() < 0.008) {
             const r = Math.random();
             if (r < 0.3) {
                 this.state = 'BOOST';
-                this.speed = this.baseSpeed * 2.5;
-                this.stateTimer = 60; // 1초
-                addLog(`🚀 ${this.name} 부스터 발동!`);
+                this.speed = this.baseSpeed * 3;
+                this.stateTimer = 50;
+                addLog(`🚀 ${this.name} 초가속!`);
             } else if (r < 0.5) {
                 this.state = 'STUNNED';
                 this.speed = 0;
-                this.stateTimer = 40; // 0.6초
-                addLog(`💫 ${this.name} 미끄러짐!`);
-            } else if (r < 0.6) {
-                 this.speed = this.baseSpeed * 0.5; // 일시적 감속
-                 this.stateTimer = 30;
-                 // 로그는 너무 많으면 지저분하니 생략
+                this.stateTimer = 40;
+                addLog(`💫 ${this.name} 과부하!`);
             }
         }
 
-        // 이동
         this.pathIndex += this.speed;
 
-        // 도착 체크
         if (this.pathIndex >= this.path.length - 1) {
             this.finished = true;
             this.pathIndex = this.path.length - 1;
@@ -83,63 +75,105 @@ class Player {
             handleFinish(this);
         }
 
-        // 화면 좌표 계산 (선형 보간)
         const idx = Math.floor(this.pathIndex);
         const nextIdx = Math.min(idx + 1, this.path.length - 1);
         const progress = this.pathIndex - idx;
-        
         const p1 = this.path[idx];
         const p2 = this.path[nextIdx];
 
-        // 좌표 보간
-        const tx = p1.x + (p2.x - p1.x) * progress;
-        const ty = p1.y + (p2.y - p1.y) * progress;
+        this.x = (p1.x + (p2.x - p1.x) * progress) * CELL_SIZE + CELL_SIZE/2;
+        this.y = (p1.y + (p2.y - p1.y) * progress) * CELL_SIZE + CELL_SIZE/2;
 
-        // 흔들림 효과 (겹침 방지)
-        const jitterX = (Math.random() - 0.5) * (CELL_SIZE * 0.4);
-        const jitterY = (Math.random() - 0.5) * (CELL_SIZE * 0.4);
-
-        this.x = tx * CELL_SIZE + CELL_SIZE/2 + jitterX;
-        this.y = ty * CELL_SIZE + CELL_SIZE/2 + jitterY;
+        // 잔상 기록
+        this.history.push({x: this.x, y: this.y});
+        if (this.history.length > 10) this.history.shift();
     }
 
     draw(ctx) {
+        // 잔상 그리기
+        if (this.state === 'BOOST' || this.speed > this.baseSpeed) {
+            ctx.save();
+            for(let i=0; i<this.history.length; i++) {
+                const pos = this.history[i];
+                const alpha = (i / this.history.length) * 0.5;
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, (CELL_SIZE/2) * (i/this.history.length), 0, Math.PI*2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        // 본체 (동그라미)
+        ctx.save();
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = this.color;
         ctx.fillStyle = this.color;
+        if (this.finished) ctx.globalAlpha = 0.2;
+        
         ctx.beginPath();
         ctx.arc(this.x, this.y, CELL_SIZE/2 - 1, 0, Math.PI * 2);
         ctx.fill();
 
-        // 이름표
+        // 중앙 코어
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, CELL_SIZE/4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
         if (!this.finished) {
             ctx.fillStyle = '#fff';
-            ctx.font = '10px Arial';
+            ctx.font = 'bold 10px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText(this.name, this.x, this.y - CELL_SIZE);
         }
     }
 }
 
-// 미로 생성 (Recursive Backtracker)
-function generateMaze(w, h) {
+function generateMaze(w, h, shape) {
     const map = Array.from({ length: h }, () => Array(w).fill(1));
     const stack = [];
-    const start = { x: 1, y: 1 };
+    const centerX = Math.floor(w/2);
+    const centerY = Math.floor(h/2);
     
+    // 모양에 따른 마스킹
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            let dist = 0;
+            if (shape === 'circle') {
+                dist = Math.sqrt((x-centerX)**2 + (y-centerY)**2);
+                if (dist > w/2 - 2) map[y][x] = -1; // 사용 불가 영역
+            } else if (shape === 'diamond') {
+                dist = Math.abs(x-centerX) + Math.abs(y-centerY);
+                if (dist > w/2 - 2) map[y][x] = -1;
+            }
+        }
+    }
+
+    // 시작점 찾기 (가장 가운데 근처의 유효한 공간)
+    let start = {x: centerX, y: centerY};
+    if (map[centerY][centerX] === -1) {
+        // 유효한 공간 찾기
+        outer: for(let r=0; r<w/2; r++) {
+            for(let i=-r; i<=r; i++) {
+                if(map[centerY+i] && map[centerY+i][centerX+r] === 1) { start={x:centerX+r, y:centerY+i}; break outer; }
+            }
+        }
+    }
+
     map[start.y][start.x] = 0;
     stack.push(start);
 
-    const dirs = [
-        { x: 0, y: -2 }, { x: 0, y: 2 }, { x: -2, y: 0 }, { x: 2, y: 0 }
-    ];
+    const dirs = [{x:0, y:-2}, {x:0, y:2}, {x:-2, y:0}, {x:2, y:0}];
 
     while (stack.length > 0) {
-        const current = stack[stack.length - 1];
+        const curr = stack[stack.length - 1];
         const neighbors = [];
 
         for (let d of dirs) {
-            const nx = current.x + d.x;
-            const ny = current.y + d.y;
-
+            const nx = curr.x + d.x, ny = curr.y + d.y;
             if (nx > 0 && nx < w - 1 && ny > 0 && ny < h - 1 && map[ny][nx] === 1) {
                 neighbors.push({ x: nx, y: ny, dx: d.x / 2, dy: d.y / 2 });
             }
@@ -148,7 +182,7 @@ function generateMaze(w, h) {
         if (neighbors.length > 0) {
             const next = neighbors[Math.floor(Math.random() * neighbors.length)];
             map[next.y][next.x] = 0;
-            map[current.y + next.dy][current.x + next.dx] = 0; // 벽 뚫기
+            map[curr.y + next.dy][curr.x + next.dx] = 0;
             stack.push({ x: next.x, y: next.y });
         } else {
             stack.pop();
@@ -157,105 +191,85 @@ function generateMaze(w, h) {
     return map;
 }
 
-// 길 찾기 (BFS)
 function solveMaze(map, start, end) {
     const queue = [[start]];
     const visited = new Set([`${start.x},${start.y}`]);
-
     while (queue.length > 0) {
         const path = queue.shift();
         const curr = path[path.length - 1];
-
-        if (curr.x === end.x && curr.y === end.y) {
-            return path;
-        }
-
-        const dirs = [{x:0, y:-1}, {x:0, y:1}, {x:-1, y:0}, {x:1, y:0}];
-        for (let d of dirs) {
-            const nx = curr.x + d.x;
-            const ny = curr.y + d.y;
-            
-            if (nx >= 0 && nx < map[0].length && ny >= 0 && ny < map.length && 
-                map[ny][nx] === 0 && !visited.has(`${nx},${ny}`)) {
+        if (curr.x === end.x && curr.y === end.y) return path;
+        for (let d of [{x:0,y:-1},{x:0,y:1},{x:-1,y:0},{x:1,y:0}]) {
+            const nx = curr.x + d.x, ny = curr.y + d.y;
+            if (nx>=0 && nx<map[0].length && ny>=0 && ny<map.length && map[ny][nx]===0 && !visited.has(`${nx},${ny}`)) {
                 visited.add(`${nx},${ny}`);
-                queue.push([...path, {x: nx, y: ny}]);
+                queue.push([...path, {x:nx, y:ny}]);
             }
         }
     }
-    return []; // 길 없음 (이론상 안 생김)
+    return [start];
 }
 
 function initGame() {
     const names = document.getElementById('player-input').value.split(',').map(s => s.trim()).filter(s => s);
-    if (names.length < 2) {
-        alert("최소 2명 이상의 참가자가 필요합니다.");
-        return;
-    }
+    if (names.length < 2) return alert("참가자 2명 이상 필요");
 
-    // 1. 화면 먼저 전환 (그래야 .main-content의 clientWidth/Height가 0이 아님)
     setupScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
 
     const diff = parseInt(document.getElementById('difficulty').value);
-    MAZE_WIDTH = diff * 2 + 1;
-    MAZE_HEIGHT = diff * 2 + 1;
-
-    // 2. 캔버스 리사이징 (화면에 표시된 후 계산)
-    const mainContent = document.querySelector('.main-content');
-    const containerW = mainContent.clientWidth * 0.75;
-    const containerH = mainContent.clientHeight;
+    MAZE_WIDTH = MAZE_HEIGHT = diff * 2 + 1;
     
-    const sizeW = Math.floor(containerW / MAZE_WIDTH);
-    const sizeH = Math.floor(containerH / MAZE_HEIGHT);
-    CELL_SIZE = Math.max(Math.min(sizeW, sizeH, 15), 5); // 최소 5px 보장
+    // 랜덤 모양 선택
+    const shapes = ['circle', 'diamond', 'rect'];
+    mazeShape = shapes[Math.floor(Math.random() * shapes.length)];
+
+    const mainContent = document.querySelector('.main-content');
+    const containerW = mainContent.clientWidth - 380;
+    const containerH = mainContent.clientHeight;
+    CELL_SIZE = Math.max(Math.min(containerW / MAZE_WIDTH, containerH / MAZE_HEIGHT, 20), 5);
 
     canvas.width = MAZE_WIDTH * CELL_SIZE;
     canvas.height = MAZE_HEIGHT * CELL_SIZE;
 
-    // 미로 생성
-    maze = generateMaze(MAZE_WIDTH, MAZE_HEIGHT);
-    path = solveMaze(maze, {x:1, y:1}, {x: MAZE_WIDTH-2, y: MAZE_HEIGHT-2});
+    maze = generateMaze(MAZE_WIDTH, MAZE_HEIGHT, mazeShape);
 
-    // 플레이어 생성
+    // 출구 (가장 중앙)
+    const exit = {x: Math.floor(MAZE_WIDTH/2), y: Math.floor(MAZE_HEIGHT/2)};
+    // 출구가 벽이면 뚫어줌
+    maze[exit.y][exit.x] = 0;
+
+    // 플레이어 생성 (각자 랜덤한 가장자리에서 시작)
+    const validStarts = [];
+    for(let y=1; y<MAZE_HEIGHT-1; y++) {
+        for(let x=1; x<MAZE_WIDTH-1; x++) {
+            if(maze[y][x] === 0) {
+                // 가장자리에 가까운 지점들 수집
+                const dist = Math.sqrt((x-exit.x)**2 + (y-exit.y)**2);
+                if(dist > MAZE_WIDTH/2 - 5) validStarts.push({x,y});
+            }
+        }
+    }
+
     players = names.map((name, i) => {
-        return new Player(name, COLORS[i % COLORS.length], path);
+        const startPos = validStarts[Math.floor(Math.random() * validStarts.length)];
+        return new Player(name, COLORS[i % COLORS.length], startPos, exit, maze);
     });
 
-    restartBtn.classList.add('hidden');
-    
-    activeList.innerHTML = '';
-    finishedList.innerHTML = '';
-    logPanel.innerHTML = '<div class="log-entry">게임 시작!</div>';
     finishedCount = 0;
-    survivorCountSpan.innerText = players.length;
-    gameMessage.innerText = "RUN FOR YOUR LIFE!";
-
     isGameRunning = true;
-    updateLeaderboard();
+    logPanel.innerHTML = '';
+    addLog(`System: ${mazeShape.toUpperCase()} 필드 생성 완료.`);
     requestAnimationFrame(gameLoop);
 }
 
-function handleFinish(player) {
+function handleFinish(p) {
     finishedCount++;
-    survivorCountSpan.innerText = players.length - finishedCount;
-    addLog(`🚩 ${player.name} 탈출 성공! (#${finishedCount})`);
-    
-    // 탈출 목록 이동
-    updateLeaderboard();
-
-    // 꼴등 확정 시
+    addLog(`🏁 ${p.name} 탈출! (#${finishedCount})`);
     if (finishedCount === players.length - 1) {
-        const loser = players.find(p => !p.finished);
-        addLog(`☠️ ${loser.name} 당첨 확정!`);
-        gameMessage.innerText = `${loser.name} 님이 꼴등입니다!`;
-        gameMessage.style.color = 'red';
+        const loser = players.find(pl => !pl.finished);
+        gameMessage.innerText = `LOOSER: ${loser.name}`;
         isGameRunning = false;
         restartBtn.classList.remove('hidden');
-        draw(); // 마지막 프레임 그림
-    } else if (finishedCount === players.length) {
-         // 모두 동시 도착 (희박함)
-         isGameRunning = false;
-         restartBtn.classList.remove('hidden');
     }
 }
 
@@ -266,68 +280,49 @@ function addLog(msg) {
     logPanel.prepend(div);
 }
 
-function updateLeaderboard() {
-    // 생존자 (거리순 정렬)
-    const survivors = players.filter(p => !p.finished).sort((a,b) => b.pathIndex - a.pathIndex);
-    activeList.innerHTML = survivors.map(p => `
-        <li>
-            <span><span class="player-dot" style="background:${p.color}"></span>${p.name}</span>
-            <small>${Math.floor((p.pathIndex / path.length)*100)}%</small>
-        </li>
-    `).join('');
-
-    // 완료자 (도착순)
-    const finishers = players.filter(p => p.finished).sort((a,b) => a.finishTime - b.finishTime);
-    finishedList.innerHTML = finishers.map((p, idx) => `
-        <li>
-            <span><span class="player-dot" style="background:${p.color}"></span>${p.name}</span>
-            <small>#${idx + 1}</small>
-        </li>
-    `).join('');
-}
-
 function update() {
     players.forEach(p => p.update());
-    
-    // 리더보드는 0.5초마다가 아니라 매 프레임 하면 성능 이슈 있을 수 있으나
-    // 인원이 적으므로 매 프레임 업데이트해도 무방 (부드러운 % 변화 위해)
-    // 최적화를 위해 10프레임마다 한 번만 돔 렌더링 업데이트
-    if (frameCnt % 10 === 0) updateLeaderboard();
 }
 
-let frameCnt = 0;
 function draw() {
-    // 배경 (잔상 효과를 위해 투명도 있는 검정으로 덮기 -> 네온 효과 극대화 하려면 그냥 지우는게 깔끔함)
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = '#050505';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 미로 그리기
-    ctx.fillStyle = '#222'; // 벽 색상
+    // 미로 벽 그리기
+    ctx.save();
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#00f2ff';
+    ctx.strokeStyle = 'rgba(0, 242, 255, 0.5)';
+    ctx.lineWidth = 1;
+
     for (let y = 0; y < MAZE_HEIGHT; y++) {
         for (let x = 0; x < MAZE_WIDTH; x++) {
             if (maze[y][x] === 1) {
+                ctx.fillStyle = '#111';
                 ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
             }
         }
     }
+    ctx.restore();
 
-    // 도착지점
-    ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
-    ctx.fillRect((MAZE_WIDTH-2)*CELL_SIZE, (MAZE_HEIGHT-2)*CELL_SIZE, CELL_SIZE, CELL_SIZE);
+    // 출구 표시
+    const ex = Math.floor(MAZE_WIDTH/2) * CELL_SIZE;
+    const ey = Math.floor(MAZE_HEIGHT/2) * CELL_SIZE;
+    ctx.save();
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#bc13fe';
+    ctx.fillStyle = '#bc13fe';
+    ctx.beginPath();
+    ctx.arc(ex + CELL_SIZE/2, ey + CELL_SIZE/2, CELL_SIZE, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
 
-    // 플레이어 그리기 (도착한 사람은 반투명)
-    players.forEach(p => {
-        if (p.finished) ctx.globalAlpha = 0.3;
-        else ctx.globalAlpha = 1.0;
-        p.draw(ctx);
-    });
-    ctx.globalAlpha = 1.0;
+    players.forEach(p => p.draw(ctx));
 }
 
 function gameLoop() {
-    if (!isGameRunning) return;
-    
-    frameCnt++;
+    if (!isGameRunning) { draw(); return; }
     update();
     draw();
     requestAnimationFrame(gameLoop);
@@ -337,6 +332,5 @@ startBtn.addEventListener('click', initGame);
 restartBtn.addEventListener('click', () => {
     gameScreen.classList.add('hidden');
     setupScreen.classList.remove('hidden');
-    gameMessage.innerText = "RACE IN PROGRESS...";
-    gameMessage.style.color = 'inherit';
+    restartBtn.classList.add('hidden');
 });

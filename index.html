@@ -29,8 +29,7 @@
     <div id="game-screen" class="screen hidden">
         <div class="header">
             <div class="status-bar">
-                <span>남은 인원: <b id="survivor-count">0</b></span>
-                <span id="game-message">RACE IN PROGRESS...</span>
+                <span>RACE STATUS: <b id="game-message">IN PROGRESS</b></span>
             </div>
         </div>
 
@@ -38,21 +37,21 @@
             <canvas id="maze-canvas"></canvas>
             
             <div class="sidebar">
-                <div class="leaderboard">
-                    <h3>🔴 생존자 (탈출 전)</h3>
+                <div class="panel">
+                    <h3>🔴 ACTIVE RUNNERS</h3>
                     <ul id="active-list"></ul>
                 </div>
-                <div class="finished-board">
-                    <h3>🏁 탈출 성공 (세이프)</h3>
+                <div class="panel">
+                    <h3>🏁 SAFE ZONE</h3>
                     <ul id="finished-list"></ul>
                 </div>
-                <div class="log-panel" id="log-panel">
-                    <div class="log-entry">게임 준비 완료...</div>
+                <div class="panel log-panel" id="log-panel">
+                    <div class="log-entry">Initializing system...</div>
                 </div>
             </div>
         </div>
         
-        <button id="restart-btn" class="cyber-btn hidden">다시 하기</button>
+        <button id="restart-btn" class="cyber-btn hidden">REBOOT SYSTEM</button>
     </div>
 
     <script src="main.js"></script>
