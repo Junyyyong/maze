@@ -28,6 +28,21 @@ let state = {
 const bgCanvas = document.createElement('canvas');
 const bgCtx = bgCanvas.getContext('2d');
 
+// --- AdSense Policy Content ---
+const policies = {
+    privacy: `<h2>Privacy Policy</h2><p>본 서비스는 사용자의 개인정보를 서버에 저장하지 않습니다. 모든 게임 데이터는 브라우저 내에서만 처리됩니다. 구글 애드센스를 통한 광고 표시를 위해 쿠키가 사용될 수 있습니다.</p>`,
+    terms: `<h2>Terms of Service</h2><p>본 게임은 누구나 자유롭게 이용 가능합니다. 비정상적인 방법으로 시스템에 부하를 주는 행위는 금지됩니다.</p>`
+};
+
+function showPolicy(type) {
+    document.getElementById('policy-text').innerHTML = policies[type];
+    document.getElementById('policy-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('policy-modal').classList.add('hidden');
+}
+
 // --- Setup UI Logic ---
 function adjustPlayerCount(delta) {
     let val = parseInt(playerCountInput.value) + delta;
@@ -142,26 +157,22 @@ class Player {
             ctx.shadowColor = this.color;
         }
         
-        // 캐릭터 원형
         ctx.fillStyle = this.color;
         if (this.finished) ctx.globalAlpha = 0.2;
         ctx.beginPath();
         ctx.arc(this.x, this.y, config.cellSize/1.6, 0, Math.PI*2);
         ctx.fill();
         
-        // 눈과 입 (표정)
+        // Face
         if (!this.finished) {
             ctx.fillStyle = '#000';
             const eyeSize = config.cellSize / 8;
             const eyeOffset = config.cellSize / 5;
-            
             if (this.state === 'STUN') {
-                // x x 눈
                 ctx.font = `${config.cellSize/2}px Arial`;
                 ctx.textAlign = 'center';
                 ctx.fillText('x x', this.x, this.y + eyeSize);
             } else if (this.state === 'BOOST') {
-                // ^ ^ 눈, D 입
                 ctx.beginPath();
                 ctx.arc(this.x - eyeOffset, this.y - eyeOffset, eyeSize, 0, Math.PI, true);
                 ctx.arc(this.x + eyeOffset, this.y - eyeOffset, eyeSize, 0, Math.PI, true);
@@ -170,19 +181,15 @@ class Player {
                 ctx.arc(this.x, this.y + eyeOffset/2, eyeSize, 0, Math.PI);
                 ctx.fill();
             } else {
-                // 일반 표정
                 ctx.beginPath();
                 ctx.arc(this.x - eyeOffset, this.y - eyeSize, eyeSize, 0, Math.PI*2);
                 ctx.arc(this.x + eyeOffset, this.y - eyeSize, eyeSize, 0, Math.PI*2);
                 ctx.fill();
-                // 입
                 ctx.fillRect(this.x - eyeOffset, this.y + eyeOffset/2, eyeOffset*2, 1);
             }
         }
-        
         ctx.restore();
 
-        // 머리 위 이름표
         if (!this.finished) {
             ctx.fillStyle = '#fff';
             ctx.font = `bold ${Math.max(10, config.cellSize * 0.8)}px sans-serif`;
@@ -192,7 +199,24 @@ class Player {
     }
 }
 
-// --- Maze Engine ---
+function solveMaze(map, start, end) {
+    const q = [[start]];
+    const v = new Set([`${start.x},${start.y}`]);
+    while(q.length) {
+        const p = q.shift();
+        const c = p[p.length-1];
+        if(c.x===end.x && c.y===end.y) return p;
+        for(let d of [{x:0,y:-1},{x:0,y:1},{x:-1,y:0},{x:1,y:0}]) {
+            const nx=c.x+d.x, ny=c.y+d.y;
+            if(nx>=0 && nx<map[0].length && ny>=0 && ny<map.length && map[ny][nx]===0 && !v.has(`${nx},${ny}`)) {
+                v.add(`${nx},${ny}`);
+                q.push([...p, {x:nx, y:ny}]);
+            }
+        }
+    }
+    return [start];
+}
+
 function generateMaze(w, h, shape) {
     const map = Array.from({length: h}, () => Array(w).fill(1));
     const center = {x: Math.floor(w/2), y: Math.floor(h/2)};
@@ -246,24 +270,6 @@ function generateMaze(w, h, shape) {
     return map;
 }
 
-function solveMaze(map, start, end) {
-    const q = [[start]];
-    const v = new Set([`${start.x},${start.y}`]);
-    while(q.length) {
-        const p = q.shift();
-        const c = p[p.length-1];
-        if(c.x===end.x && c.y===end.y) return p;
-        for(let d of [{x:0,y:-1},{x:0,y:1},{x:-1,y:0},{x:1,y:0}]) {
-            const nx=c.x+d.x, ny=c.y+d.y;
-            if(nx>=0 && nx<map[0].length && ny>=0 && ny<map.length && map[ny][nx]===0 && !v.has(`${nx},${ny}`)) {
-                v.add(`${nx},${ny}`);
-                q.push([...p, {x:nx, y:ny}]);
-            }
-        }
-    }
-    return [start];
-}
-
 function preRenderMaze() {
     bgCanvas.width = canvas.width;
     bgCanvas.height = canvas.height;
@@ -274,7 +280,6 @@ function preRenderMaze() {
         for(let x=0; x<config.width; x++) {
             const cx = x * config.cellSize;
             const cy = y * config.cellSize;
-            
             if(state.maze[y][x] === 1) {
                 bgCtx.fillStyle = '#11121a';
                 bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
@@ -283,8 +288,6 @@ function preRenderMaze() {
                 if(item) {
                     bgCtx.fillStyle = item.type === 'boost' ? 'rgba(0, 242, 255, 0.15)' : 'rgba(188, 19, 254, 0.15)';
                     bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
-                    
-                    // 아이템 아이콘 추가
                     bgCtx.fillStyle = item.type === 'boost' ? '#00f2ff' : '#bc13fe';
                     bgCtx.font = `${config.cellSize * 0.8}px Arial`;
                     bgCtx.textAlign = 'center';
@@ -304,28 +307,23 @@ function preRenderMaze() {
     bgCtx.shadowBlur = 0;
 }
 
-function spawnFloatingText(x, y, text, color) {
-    state.floatingTexts.push({ x, y, text, color, life: 1.0 });
-}
-
 function addHistoryLog(msg, color = '#fff') {
     const div = document.createElement('div');
     div.className = 'log-entry';
     div.style.borderLeftColor = color;
     div.innerHTML = `<span style="color: ${color}">${msg}</span>`;
-    
-    // 맨 위에 추가
     logPanel.prepend(div);
-    
-    // 자동 스크롤을 위로 고정
     logPanel.scrollTop = 0;
+}
+
+function spawnFloatingText(x, y, text, color) {
+    state.floatingTexts.push({ x, y, text, color, life: 1.0 });
 }
 
 function handleFinish(p) {
     state.finishedCount++;
     state.cameraShake = 8;
-    addHistoryLog(`🏁 ${p.name} 탈출 성공! (#${state.finishedCount})`, p.color);
-    
+    addHistoryLog(`🏁 ${p.name} SAFE! (#${state.finishedCount})`, p.color);
     const li = document.createElement('li');
     li.innerHTML = `<span style="color:${p.color}">${p.name}</span> <b>#${state.finishedCount}</b>`;
     finishedList.appendChild(li);
@@ -350,7 +348,6 @@ function initGame() {
 
     const difficultyVal = parseInt(document.getElementById('difficulty').value);
     config.width = config.height = difficultyVal * 2 + 1;
-    
     const shapes = ['rect', 'circle', 'diamond'];
     config.shape = shapes[Math.floor(Math.random() * shapes.length)];
 
@@ -383,7 +380,7 @@ function initGame() {
     state.finishedCount = 0;
     state.running = true;
     logPanel.innerHTML = '';
-    addHistoryLog(`🚀 SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, '#00f2ff');
+    addHistoryLog(`🚀 SYSTEM INITIALIZED (${config.shape.toUpperCase()})`, '#00f2ff');
     
     preRenderMaze();
     activeList.innerHTML = '';
@@ -444,3 +441,5 @@ restartBtn.addEventListener('click', () => {
 });
 window.adjustPlayerCount = adjustPlayerCount;
 window.randomizeName = randomizeName;
+window.showPolicy = showPolicy;
+window.closeModal = closeModal;

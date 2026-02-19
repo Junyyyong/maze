@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NEON BATTLE MAZE</title>
+    <title>네온 배틀 메이즈 - 실시간 미로 탈출 서바이벌 게임</title>
+    <meta name="description" content="친구들과 함께 즐기는 실시간 네온 미로 레이스 게임! 부스터와 장애물을 피해 가장 먼저 탈출하세요. 꼴등이 벌칙을 받는 짜릿한 내기 게임입니다.">
+    <meta name="keywords" content="미로게임, 내기게임, 서바이벌게임, 네온게임, 미로탈출, 술자리게임, 사다리타기대체">
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Orbitron:wght@400;700&family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <!-- Font Awesome for icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Orbitron:wght@400;700&family=Roboto+Mono:wght@400;700&family=Noto+Sans+KR:wght@300;400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -14,7 +15,7 @@
     <div id="setup-screen" class="screen">
         <div class="setup-header">
             <h1 class="glitch" data-text="NEON MAZE">NEON MAZE</h1>
-            <p class="subtitle"><i class="fas fa-microchip"></i> SYSTEM INITIALIZING...</p>
+            <p class="subtitle"><i class="fas fa-microchip"></i> SYSTEM ONLINE</p>
         </div>
         
         <div class="setup-card">
@@ -22,7 +23,7 @@
                 <label><i class="fas fa-users"></i> PARTICIPANTS</label>
                 <div class="player-count-control">
                     <button type="button" class="btn-round" onclick="adjustPlayerCount(-1)"><i class="fas fa-minus"></i></button>
-                    <input type="number" id="player-count" value="4" min="2" max="8" readonly>
+                    <input type="number" id="player-count" value="4" min="2" max="12" readonly>
                     <button type="button" class="btn-round" onclick="adjustPlayerCount(1)"><i class="fas fa-plus"></i></button>
                 </div>
             </div>
@@ -32,24 +33,43 @@
             </div>
 
             <div class="setup-section full-width">
-                <label><i class="fas fa-layer-group"></i> COMPLEXITY & SCALE</label>
+                <label><i class="fas fa-layer-group"></i> COMPLEXITY</label>
                 <div class="range-container">
-                    <i class="fas fa-easy"></i>
                     <input type="range" id="difficulty" min="10" max="50" value="25">
-                    <i class="fas fa-hard-hat"></i>
                 </div>
             </div>
 
             <button id="start-btn" class="cyber-btn-large">
-                <i class="fas fa-play"></i> INITIATE RACE
+                <i class="fas fa-power-off"></i> INITIATE RACE
             </button>
         </div>
+
+        <!-- AdSense용 콘텐츠 섹션 -->
+        <article class="content-article">
+            <h2>네온 배틀 메이즈: 최고의 실시간 내기 게임</h2>
+            <p>네온 배틀 메이즈는 단순한 미로 찾기를 넘어, 친구들과 함께 스릴을 만끽할 수 있는 <strong>실시간 서바이벌 레이스 게임</strong>입니다. 사다리 타기나 돌려돌려 돌림판보다 훨씬 더 박진감 넘치는 방식으로 벌칙자를 선정해 보세요.</p>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <h3><i class="fas fa-bolt"></i> 부스트 시스템</h3>
+                    <p>미로 곳곳에 배치된 번개 아이콘을 밟으세요. 순간적으로 가속하며 순위를 뒤집을 수 있습니다.</p>
+                </div>
+                <div class="info-item">
+                    <h3><i class="fas fa-spider"></i> 슬로우 존</h3>
+                    <p>거미줄 모양의 트랩은 당신의 속도를 늦춥니다. 전략적인 이동으로 함정을 피해야 합니다.</p>
+                </div>
+                <div class="info-item">
+                    <h3><i class="fas fa-bug"></i> 시스템 글리치</h3>
+                    <p>예기치 못한 시스템 오류로 캐릭터가 일시적으로 기절할 수 있습니다. 운과 실력이 모두 필요한 레이스입니다.</p>
+                </div>
+            </div>
+        </article>
     </div>
 
     <div id="game-screen" class="screen hidden">
         <div class="header">
             <div class="neon-badge">
-                <i class="fas fa-broadcast-tower"></i> <span id="game-message">CONNECTING...</span>
+                <i class="fas fa-signal"></i> <span id="game-message">CONNECTING...</span>
             </div>
         </div>
 
@@ -65,20 +85,40 @@
                 </div>
                 
                 <div class="panel finish-panel">
-                    <h3><i class="fas fa-flag-checkered"></i> FINISH LINE</h3>
+                    <h3><i class="fas fa-flag-checkered"></i> SAFE ZONE</h3>
                     <ul id="finished-list"></ul>
                 </div>
 
                 <div class="panel history-panel">
-                    <h3><i class="fas fa-history"></i> LIVE LOG</h3>
+                    <h3><i class="fas fa-list-ul"></i> LIVE LOG</h3>
                     <div id="log-panel" class="log-content"></div>
                 </div>
             </div>
         </div>
         
-        <button id="restart-btn" class="cyber-btn hidden">
-            <i class="fas fa-redo"></i> REBOOT
-        </button>
+        <div id="restart-container">
+            <button id="restart-btn" class="reboot-btn hidden">
+                <span class="btn-text">REBOOT SYSTEM</span>
+                <span class="btn-glitch"></span>
+            </button>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="#" onclick="showPolicy('privacy')">Privacy Policy</a>
+            <a href="#" onclick="showPolicy('terms')">Terms of Service</a>
+            <a href="https://github.com/Junyyyong/maze" target="_blank">Contact Us</a>
+        </div>
+        <p>&copy; 2026 Neon Maze Race. All Rights Reserved.</p>
+    </footer>
+
+    <!-- Policy Modal -->
+    <div id="policy-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <div id="policy-text"></div>
+        </div>
     </div>
 
     <script src="main.js"></script>
