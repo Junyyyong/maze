@@ -192,17 +192,22 @@ function initGame() {
         return;
     }
 
+    // 1. 화면 먼저 전환 (그래야 .main-content의 clientWidth/Height가 0이 아님)
+    setupScreen.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
+
     const diff = parseInt(document.getElementById('difficulty').value);
     MAZE_WIDTH = diff * 2 + 1;
     MAZE_HEIGHT = diff * 2 + 1;
 
-    // 캔버스 리사이징
-    // 화면 크기에 맞춰 셀 크기 조정
-    const containerW = document.querySelector('.main-content').clientWidth * 0.75;
-    const containerH = document.querySelector('.main-content').clientHeight;
+    // 2. 캔버스 리사이징 (화면에 표시된 후 계산)
+    const mainContent = document.querySelector('.main-content');
+    const containerW = mainContent.clientWidth * 0.75;
+    const containerH = mainContent.clientHeight;
+    
     const sizeW = Math.floor(containerW / MAZE_WIDTH);
     const sizeH = Math.floor(containerH / MAZE_HEIGHT);
-    CELL_SIZE = Math.min(sizeW, sizeH, 15); // 최대 15px
+    CELL_SIZE = Math.max(Math.min(sizeW, sizeH, 15), 5); // 최소 5px 보장
 
     canvas.width = MAZE_WIDTH * CELL_SIZE;
     canvas.height = MAZE_HEIGHT * CELL_SIZE;
@@ -216,8 +221,6 @@ function initGame() {
         return new Player(name, COLORS[i % COLORS.length], path);
     });
 
-    setupScreen.classList.add('hidden');
-    gameScreen.classList.remove('hidden');
     restartBtn.classList.add('hidden');
     
     activeList.innerHTML = '';
