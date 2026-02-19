@@ -3,55 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>배틀 메이즈: 꼴등이 당첨!</title>
+    <title>네온 배틀 메이즈</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
 </head>
 <body>
 
     <div id="setup-screen" class="screen">
-        <h1 class="glitch" data-text="MAZE RACE">MAZE RACE</h1>
-        <p class="subtitle">가장 늦게 탈출하는 사람이 당첨입니다.</p>
+        <h1 class="glitch" data-text="NEON MAZE">NEON MAZE</h1>
+        <p class="subtitle">마지막까지 살아남는 자가 승리(또는 패배)합니다.</p>
         
-        <div class="input-group">
-            <label>참가자 이름 (쉼표로 구분)</label>
-            <input type="text" id="player-input" placeholder="예: 철수, 영희, 민수, 짱구" value="철수, 영희, 민수, 짱구">
-        </div>
+        <div class="setup-container">
+            <div class="input-group">
+                <label>참가 인원</label>
+                <div class="player-count-control">
+                    <button type="button" onclick="adjustPlayerCount(-1)">-</button>
+                    <input type="number" id="player-count" value="4" min="2" max="8" readonly>
+                    <button type="button" onclick="adjustPlayerCount(1)">+</button>
+                </div>
+            </div>
 
-        <div class="settings">
-            <label>맵 복잡도</label>
-            <input type="range" id="difficulty" min="10" max="40" value="25">
-        </div>
+            <div id="player-list-setup" class="player-grid">
+                <!-- 플레이어 설정 슬롯이 여기에 동적으로 생성됨 -->
+            </div>
 
-        <button id="start-btn" class="cyber-btn">RACE START</button>
+            <div class="settings">
+                <label>미로 복잡도</label>
+                <input type="range" id="difficulty" min="10" max="30" value="20">
+            </div>
+
+            <button id="start-btn" class="cyber-btn">SYSTEM INITIALIZE</button>
+        </div>
     </div>
 
     <div id="game-screen" class="screen hidden">
         <div class="header">
             <div class="status-bar">
-                <span>RACE STATUS: <b id="game-message">IN PROGRESS</b></span>
+                <span>STATUS: <b id="game-message">RACING...</b></span>
             </div>
         </div>
 
-        <div class="main-content">
-            <canvas id="maze-canvas"></canvas>
+        <div class="game-layout">
+            <div class="canvas-container">
+                <canvas id="maze-canvas"></canvas>
+            </div>
             
             <div class="sidebar">
                 <div class="panel">
-                    <h3>🔴 ACTIVE RUNNERS</h3>
+                    <h3>⚡ RUNNERS STATUS</h3>
                     <ul id="active-list"></ul>
                 </div>
                 <div class="panel">
-                    <h3>🏁 SAFE ZONE</h3>
+                    <h3>🏁 FINISH LINE</h3>
                     <ul id="finished-list"></ul>
                 </div>
-                <div class="panel log-panel" id="log-panel">
-                    <div class="log-entry">Initializing system...</div>
-                </div>
+                <div class="panel log-panel" id="log-panel"></div>
             </div>
         </div>
         
-        <button id="restart-btn" class="cyber-btn hidden">REBOOT SYSTEM</button>
+        <button id="restart-btn" class="cyber-btn hidden">REBOOT</button>
     </div>
 
     <script src="main.js"></script>
