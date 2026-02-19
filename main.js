@@ -31,7 +31,7 @@ const bgCtx = bgCanvas.getContext('2d');
 // --- Setup UI Logic ---
 function adjustPlayerCount(delta) {
     let val = parseInt(playerCountInput.value) + delta;
-    val = Math.max(2, Math.min(12, val)); // Increased max to 12
+    val = Math.max(2, Math.min(12, val));
     playerCountInput.value = val;
     renderPlayerSetup();
 }
@@ -45,7 +45,7 @@ function renderPlayerSetup() {
     for (let i = 0; i < count; i++) {
         const div = document.createElement('div');
         div.className = 'player-setup-card';
-        const defaultName = existingNames[i] || RANDOM_NAMES[i % RANDOM_NAMES.length] + " " + (Math.floor(i / RANDOM_NAMES.length) || "");
+        const defaultName = existingNames[i] || RANDOM_NAMES[i % RANDOM_NAMES.length];
         div.innerHTML = `
             <div class="color-dot" style="background: ${COLORS[i % COLORS.length]}"></div>
             <input type="text" class="player-name-input" value="${defaultName.trim()}">
@@ -90,13 +90,13 @@ class Player {
                 this.state = 'BOOST';
                 this.speed = 0.5;
                 this.timer = 30;
-                addHistoryLog(`${this.name}: SPEED BOOST ACTIVATED`, this.color);
+                addHistoryLog(`⚡ ${this.name}: BOOSTED!`, this.color);
                 spawnFloatingText(this.x, this.y, "⚡ BOOST", this.color);
             } else if (item.type === 'slow') {
                 this.state = 'SLOW';
                 this.speed = 0.04;
                 this.timer = 45;
-                addHistoryLog(`${this.name}: TRAPPED IN SLOW ZONE`, '#bc13fe');
+                addHistoryLog(`🕸️ ${this.name}: SLOWED!`, '#bc13fe');
                 spawnFloatingText(this.x, this.y, "🕸️ SLOW", '#bc13fe');
             }
         }
@@ -109,12 +109,11 @@ class Player {
             }
         }
 
-        // Random Glitch (Stun)
         if (this.state === 'RUN' && Math.random() < 0.0015) {
             this.state = 'STUN';
             this.speed = 0;
             this.timer = 70;
-            addHistoryLog(`${this.name}: SYSTEM GLITCH (STUNNED)`, '#fff');
+            addHistoryLog(`💫 ${this.name}: GLITCHED!`, '#fff');
             spawnFloatingText(this.x, this.y, "💫 GLITCH", '#fff');
         }
 
@@ -142,18 +141,54 @@ class Player {
             ctx.shadowBlur = 20;
             ctx.shadowColor = this.color;
         }
+        
+        // 캐릭터 원형
         ctx.fillStyle = this.color;
         if (this.finished) ctx.globalAlpha = 0.2;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, config.cellSize/1.8, 0, Math.PI*2);
+        ctx.arc(this.x, this.y, config.cellSize/1.6, 0, Math.PI*2);
         ctx.fill();
         
-        // Core highlight
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, config.cellSize/4, 0, Math.PI*2);
-        ctx.fill();
+        // 눈과 입 (표정)
+        if (!this.finished) {
+            ctx.fillStyle = '#000';
+            const eyeSize = config.cellSize / 8;
+            const eyeOffset = config.cellSize / 5;
+            
+            if (this.state === 'STUN') {
+                // x x 눈
+                ctx.font = `${config.cellSize/2}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.fillText('x x', this.x, this.y + eyeSize);
+            } else if (this.state === 'BOOST') {
+                // ^ ^ 눈, D 입
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset, this.y - eyeOffset, eyeSize, 0, Math.PI, true);
+                ctx.arc(this.x + eyeOffset, this.y - eyeOffset, eyeSize, 0, Math.PI, true);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y + eyeOffset/2, eyeSize, 0, Math.PI);
+                ctx.fill();
+            } else {
+                // 일반 표정
+                ctx.beginPath();
+                ctx.arc(this.x - eyeOffset, this.y - eyeSize, eyeSize, 0, Math.PI*2);
+                ctx.arc(this.x + eyeOffset, this.y - eyeSize, eyeSize, 0, Math.PI*2);
+                ctx.fill();
+                // 입
+                ctx.fillRect(this.x - eyeOffset, this.y + eyeOffset/2, eyeOffset*2, 1);
+            }
+        }
+        
         ctx.restore();
+
+        // 머리 위 이름표
+        if (!this.finished) {
+            ctx.fillStyle = '#fff';
+            ctx.font = `bold ${Math.max(10, config.cellSize * 0.8)}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText(this.name, this.x, this.y - config.cellSize);
+        }
     }
 }
 
@@ -162,7 +197,6 @@ function generateMaze(w, h, shape) {
     const map = Array.from({length: h}, () => Array(w).fill(1));
     const center = {x: Math.floor(w/2), y: Math.floor(h/2)};
 
-    // Masking for different shapes
     for(let y = 0; y < h; y++) {
         for(let x = 0; x < w; x++) {
             if (shape === 'circle') {
@@ -175,7 +209,6 @@ function generateMaze(w, h, shape) {
 
     let start = {x: 1, y: 1};
     if (map[1][1] === -1) {
-        // Find nearest valid start
         outer: for(let y=1; y<h-1; y++) {
             for(let x=1; x<w-1; x++) {
                 if(map[y][x] === 1) { start = {x, y}; break outer; }
@@ -185,7 +218,6 @@ function generateMaze(w, h, shape) {
 
     map[start.y][start.x] = 0;
     const stack = [start];
-    
     while(stack.length) {
         const cur = stack[stack.length-1];
         const nbs = [];
@@ -202,9 +234,8 @@ function generateMaze(w, h, shape) {
         } else stack.pop();
     }
 
-    // Populate items
     state.items = [];
-    const itemCount = (w * h) * 0.04;
+    const itemCount = (w * h) * 0.05;
     for(let i=0; i<itemCount; i++) {
         const rx = Math.floor(Math.random()*w);
         const ry = Math.floor(Math.random()*h);
@@ -233,7 +264,6 @@ function solveMaze(map, start, end) {
     return [start];
 }
 
-// --- Rendering Logic ---
 function preRenderMaze() {
     bgCanvas.width = canvas.width;
     bgCanvas.height = canvas.height;
@@ -248,18 +278,21 @@ function preRenderMaze() {
             if(state.maze[y][x] === 1) {
                 bgCtx.fillStyle = '#11121a';
                 bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
-                bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-                bgCtx.strokeRect(cx, cy, config.cellSize, config.cellSize);
             } else if (state.maze[y][x] === 0) {
                 const item = state.items.find(it => it.x === x && it.y === y);
                 if(item) {
                     bgCtx.fillStyle = item.type === 'boost' ? 'rgba(0, 242, 255, 0.15)' : 'rgba(188, 19, 254, 0.15)';
                     bgCtx.fillRect(cx, cy, config.cellSize, config.cellSize);
+                    
+                    // 아이템 아이콘 추가
+                    bgCtx.fillStyle = item.type === 'boost' ? '#00f2ff' : '#bc13fe';
+                    bgCtx.font = `${config.cellSize * 0.8}px Arial`;
+                    bgCtx.textAlign = 'center';
+                    bgCtx.fillText(item.type === 'boost' ? '⚡' : '🕸️', cx + config.cellSize/2, cy + config.cellSize * 0.8);
                 }
             }
         }
     }
-    // Target Portal
     const ex = Math.floor(config.width/2) * config.cellSize;
     const ey = Math.floor(config.height/2) * config.cellSize;
     bgCtx.fillStyle = '#bc13fe';
@@ -280,14 +313,18 @@ function addHistoryLog(msg, color = '#fff') {
     div.className = 'log-entry';
     div.style.borderLeftColor = color;
     div.innerHTML = `<span style="color: ${color}">${msg}</span>`;
-    logPanel.appendChild(div);
-    logPanel.scrollTop = logPanel.scrollHeight;
+    
+    // 맨 위에 추가
+    logPanel.prepend(div);
+    
+    // 자동 스크롤을 위로 고정
+    logPanel.scrollTop = 0;
 }
 
 function handleFinish(p) {
     state.finishedCount++;
     state.cameraShake = 8;
-    addHistoryLog(`${p.name} REACHED FINISH! (#${state.finishedCount})`, p.color);
+    addHistoryLog(`🏁 ${p.name} 탈출 성공! (#${state.finishedCount})`, p.color);
     
     const li = document.createElement('li');
     li.innerHTML = `<span style="color:${p.color}">${p.name}</span> <b>#${state.finishedCount}</b>`;
@@ -314,7 +351,6 @@ function initGame() {
     const difficultyVal = parseInt(document.getElementById('difficulty').value);
     config.width = config.height = difficultyVal * 2 + 1;
     
-    // Choose random shape
     const shapes = ['rect', 'circle', 'diamond'];
     config.shape = shapes[Math.floor(Math.random() * shapes.length)];
 
@@ -327,7 +363,6 @@ function initGame() {
     const exit = {x: Math.floor(config.width/2), y: Math.floor(config.height/2)};
     state.maze[exit.y][exit.x] = 0;
 
-    // Pick unique start positions far from exit
     const validStarts = [];
     for(let y=1; y<config.height-1; y++) {
         for(let x=1; x<config.width-1; x++) {
@@ -348,7 +383,7 @@ function initGame() {
     state.finishedCount = 0;
     state.running = true;
     logPanel.innerHTML = '';
-    addHistoryLog(`SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, '#00f2ff');
+    addHistoryLog(`🚀 SYSTEM: MAZE GENERATED (${config.shape.toUpperCase()})`, '#00f2ff');
     
     preRenderMaze();
     activeList.innerHTML = '';
@@ -375,7 +410,7 @@ function update() {
 
     const survivors = state.players.filter(p => !p.finished).sort((a,b) => b.currentIdx - a.currentIdx);
     activeList.innerHTML = survivors.map(p => {
-        let status = `<span style="color: #666">${Math.floor((p.currentIdx/p.path.length)*100)}%</span>`;
+        let status = '';
         if(p.state === 'BOOST') status = '<span class="badge badge-boost">BOOST</span>';
         if(p.state === 'STUN') status = '<span class="badge badge-stun">GLITCH</span>';
         if(p.state === 'SLOW') status = '<span class="badge badge-slow">TRAPPED</span>';
