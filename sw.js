@@ -1,5 +1,5 @@
 /* Paper Shelf 서비스 워커: 앱 셸과 PDF.js를 캐시해 오프라인에서도 동작 */
-const CACHE = 'paper-shelf-v10'; // bump to force cache refresh on all devices
+const CACHE = 'paper-shelf-v11'; // bump to force cache refresh on all devices
 const ASSETS = [
   './',
   './index.html',

@@ -223,91 +223,91 @@ async function getImageRects(page) {
   return merged;
 }
 
-// 캡션 기반 그림/표 영역 감지
-// 1순위: 래스터 이미지 rect를 직접 기준으로 삼음 (정밀)
-// 2순위: 캡션 근처 텍스트 갭 (벡터/표 fallback)
 const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
 
 function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
   const captions = lines.filter(l => CAPTION_RE.test(l.text));
   const body     = lines.filter(l => l.h >= bodySize * 0.65 && !CAPTION_RE.test(l.text));
-  const colX0 = body.length ? Math.min(...body.map(b => b.x0)) : 0;
-  const colX1 = body.length ? Math.max(...body.map(b => b.x1)) : pageW;
+  const colX0    = body.length ? Math.min(...body.map(b => b.x0)) : 0;
+  const colX1    = body.length ? Math.max(...body.map(b => b.x1)) : pageW;
+  const colSpan  = colX1 - colX0;
 
-  // 표 행 판별: 열 간격(maxGap)이 bodySize*2 이상이거나 폭이 컬럼의 40% 미만이면 제외
-  const colSpan = colX1 - colX0;
+  // 갭 감지에서 표 행(넓은 열 간격)과 좁은 레이블을 제외
   const bodyStrict = body.filter(l =>
     l.maxGap < bodySize * 2 && (l.x1 - l.x0) > colSpan * 0.4);
+
+  // 갭 방향 판별에 쓸 표 행 목록 (캡션 반복 계산 방지)
+  const tableRows = lines.filter(l => l.maxGap > bodySize * 2 && !CAPTION_RE.test(l.text));
+
+  // 래스터가 캡션 중심으로부터 이 거리 안에 있어야 연결됨
+  const RASTER_RADIUS = bodySize * 16;
 
   const regions  = [];
   const usedCaps = [];
 
   for (const cap of captions) {
-    const capMid = cap.y + cap.h / 2;
-
     // ── 1순위: 래스터 이미지 rect ──────────────────────────
-    // 진단 결과: 이 PDF의 Figure들은 캡션과 74~87pt 이내.
-    // Table이 오인하는 먼 래스터(188~391pt)는 bodySize*16≈144pt 임계값으로 배제.
-    const RASTER_RADIUS = bodySize * 16;
-    const near = rasterRects.filter(r =>
+    const capMid = cap.y + cap.h / 2;
+    const near   = rasterRects.filter(r =>
       Math.abs((r.yMin + r.yMax) / 2 - capMid) < RASTER_RADIUS);
 
     if (near.length) {
       let yLo = Math.min(...near.map(r => r.yMin));
       let yHi = Math.max(...near.map(r => r.yMax));
+      let x0  = Math.min(...near.map(r => r.xMin));
+      let x1  = Math.max(...near.map(r => r.xMax));
 
-      // 직접 붙어있는 텍스트만 흡수 (표 헤더, 축 레이블): gap ≤ bodySize
-      const NEAR_Y = bodySize;
+      // 래스터에 직접 붙어있는 텍스트 흡수 (3회 반복으로 최대 3줄)
       for (let pass = 0; pass < 3; pass++) {
         for (const l of lines) {
           if (CAPTION_RE.test(l.text)) continue;
-          const lTop = l.y + l.h, lBot = l.y;
-          if (lTop > yHi && lBot - yHi <= NEAR_Y) yHi = lTop;
-          if (lBot < yLo && yLo - lTop <= NEAR_Y) yLo = lBot;
+          if (l.y + l.h > yHi && l.y - yHi <= bodySize) yHi = l.y + l.h;
+          if (l.y < yLo && yLo - (l.y + l.h) <= bodySize) yLo = l.y;
         }
       }
 
       regions.push({
         yLo: Math.max(0, yLo - bodySize * 0.3),
         yHi: Math.min(pageH, yHi + bodySize * 0.3),
-        x0: colX0, x1: colX1,
-        caption: cap.text,
+        x0, x1, caption: cap.text,
       });
       usedCaps.push(cap);
       continue;
     }
 
     // ── 2순위: 캡션 위/아래 텍스트 갭 ──────────────────────
-    // bodyStrict(표 행 제외) 기준으로 갭을 감지해 텍스트 전용 표도 올바르게 포착
     const capTop = cap.y + cap.h;
     const capBot = cap.y;
+
     let aboveBase = pageH;
     for (const b of bodyStrict)
       if (b.y > capTop + bodySize * 1.5 && b.y < aboveBase) aboveBase = b.y;
-    const spanAbove = aboveBase - capTop;
 
     let belowTop = 0;
     for (const b of bodyStrict)
       if (b.y + b.h < capBot - bodySize * 1.5 && b.y + b.h > belowTop) belowTop = b.y + b.h;
+
+    const spanAbove = aboveBase - capTop;
     const spanBelow = capBot - belowTop;
 
-    // 표 행이 어느 쪽에 있는지 확인 → 갭 크기보다 우선해서 방향 결정
-    const tableRows = lines.filter(l => l.maxGap > bodySize * 2 && !CAPTION_RE.test(l.text));
-    const tableRowsAbove = tableRows.some(l => l.y >= capTop && l.y < aboveBase);
-    const tableRowsBelow = tableRows.some(l => l.y + l.h <= capBot && l.y + l.h > belowTop);
+    // 표 행이 있는 쪽을 갭 크기보다 우선
+    const hasRowsAbove = tableRows.some(l => l.y >= capTop && l.y < aboveBase);
+    const hasRowsBelow = tableRows.some(l => l.y + l.h <= capBot && l.y + l.h > belowTop);
 
     let yLo, yHi;
-    if (tableRowsAbove && spanAbove > bodySize * 2) {
-      yHi = aboveBase; yLo = capTop;
-    } else if (tableRowsBelow && spanBelow > bodySize * 2) {
-      yHi = capBot; yLo = belowTop;
-    } else if (spanAbove >= spanBelow && spanAbove > bodySize * 2.5) {
-      yHi = aboveBase; yLo = capTop;
-    } else if (spanBelow > bodySize * 2.5) {
-      yHi = capBot; yLo = belowTop;
-    } else continue;
+    if      (hasRowsAbove && spanAbove > bodySize * 2)          { yHi = aboveBase; yLo = capTop;  }
+    else if (hasRowsBelow && spanBelow > bodySize * 2)          { yHi = capBot;    yLo = belowTop; }
+    else if (spanAbove >= spanBelow && spanAbove > bodySize * 2.5) { yHi = aboveBase; yLo = capTop;  }
+    else if (spanBelow > bodySize * 2.5)                        { yHi = capBot;    yLo = belowTop; }
+    else continue;
 
-    regions.push({ yLo, yHi, x0: colX0, x1: colX1, caption: cap.text });
+    // 갭 영역 안 래스터 x 범위도 병합 (이미지 우측 절단 방지)
+    const inRasters = rasterRects.filter(r =>
+      r.yMin >= yLo - bodySize && r.yMax <= yHi + bodySize);
+    const x0 = inRasters.length ? Math.min(colX0, ...inRasters.map(r => r.xMin)) : colX0;
+    const x1 = inRasters.length ? Math.max(colX1, ...inRasters.map(r => r.xMax)) : colX1;
+
+    regions.push({ yLo, yHi, x0, x1, caption: cap.text });
     usedCaps.push(cap);
   }
 
@@ -319,6 +319,7 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
 
   if (!regions.length) return { regions: [], usedCaps };
 
+  // 인접 영역 병합
   regions.sort((a, b) => b.yHi - a.yHi);
   const merged = [];
   for (const g of regions) {
@@ -381,6 +382,8 @@ async function extractBlocks(pdf, onProgress) {
     ]);
     let lines = groupIntoLines(content.items);
     lines = reorderColumns(lines, pageW);
+    // 페이지 꼬리말/머리말 제거: 하단 3줄 높이 이내의 짧은 라인 (e.g. "www.aodr.org 279")
+    lines = lines.filter(l => l.y >= bodySize * 3 || l.text.length > 80 || CAPTION_RE.test(l.text));
 
     // 텍스트 없는 페이지 → 전체 그림
     if (lines.length === 0) {
