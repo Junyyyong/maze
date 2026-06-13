@@ -238,17 +238,31 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
       Math.abs((r.yMin + r.yMax) / 2 - capMid) < pageH * 0.55);
 
     if (near.length) {
-      const xMin = Math.min(...near.map(r => r.xMin));
-      const xMax = Math.max(...near.map(r => r.xMax));
-      const yMin = Math.min(...near.map(r => r.yMin));
-      const yMax = Math.max(...near.map(r => r.yMax));
-      // 래스터 rect 기준으로 y 범위 확장: 위쪽 여백 약간 포함
-      const pad = bodySize * 0.8;
+      let xMin = Math.min(...near.map(r => r.xMin));
+      let xMax = Math.max(...near.map(r => r.xMax));
+      let yLo  = Math.min(...near.map(r => r.yMin));
+      let yHi  = Math.max(...near.map(r => r.yMax));
+
+      // 래스터 이미지 rect는 표 셀의 이미지만 감지하고 텍스트 헤더/레이블은 놓침.
+      // x 범위가 겹치는 텍스트 라인을 bodySize*5 이내에서 흡수해 표 전체를 포함.
+      const NEAR_Y = bodySize * 5;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const l of lines) {
+          if (CAPTION_RE.test(l.text)) continue;
+          if (l.x1 < xMin - 12 || l.x0 > xMax + 12) continue; // x 겹침 없음
+          const lTop = l.y + l.h, lBot = l.y;
+          if (lTop > yHi && lBot < yHi + NEAR_Y) { yHi = lTop; changed = true; }
+          if (lBot < yLo && lTop > yLo - NEAR_Y)  { yLo = lBot; changed = true; }
+        }
+      }
+
       regions.push({
-        yLo: Math.max(0, yMin - pad),
-        yHi: Math.min(pageH, yMax + pad),
-        x0: Math.max(0, xMin - 6),
-        x1: Math.min(pageW, xMax + 6),
+        yLo: Math.max(0, yLo - bodySize * 0.4),
+        yHi: Math.min(pageH, yHi + bodySize * 0.4),
+        x0: Math.max(0, xMin - 8),
+        x1: Math.min(pageW, xMax + 8),
         caption: cap.text,
       });
       usedCaps.push(cap);
