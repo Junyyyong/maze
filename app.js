@@ -109,9 +109,13 @@ function groupIntoLines(items) {
   }
   return lines.map(l => {
     l.frags.sort((a, b) => a.x - b.x);
-    let text = '', prevEnd = null;
+    let text = '', prevEnd = null, maxGap = 0;
     for (const f of l.frags) {
-      if (prevEnd !== null && f.x - prevEnd > f.h * 0.25 && !text.endsWith(' ')) text += ' ';
+      if (prevEnd !== null) {
+        const gap = f.x - prevEnd;
+        if (gap > maxGap) maxGap = gap;
+        if (gap > f.h * 0.25 && !text.endsWith(' ')) text += ' ';
+      }
       text += f.str;
       prevEnd = f.x + f.w;
     }
@@ -121,7 +125,7 @@ function groupIntoLines(items) {
       y: l.y,
       x0: Math.min(...l.frags.map(f => f.x)),
       x1: Math.max(...l.frags.map(f => f.x + f.w)),
-      h,
+      h, maxGap,
     };
   }).filter(l => l.text);
 }
@@ -227,9 +231,13 @@ const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그�
 function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
   const captions = lines.filter(l => CAPTION_RE.test(l.text));
   const body     = lines.filter(l => l.h >= bodySize * 0.65 && !CAPTION_RE.test(l.text));
-  // 본문 컬럼 x 범위 (표 테두리까지 포함하는 넉넉한 너비)
   const colX0 = body.length ? Math.min(...body.map(b => b.x0)) : 0;
   const colX1 = body.length ? Math.max(...body.map(b => b.x1)) : pageW;
+
+  // 표 행 판별: 열 간격(maxGap)이 bodySize*2 이상이거나 폭이 컬럼의 40% 미만이면 제외
+  const colSpan = colX1 - colX0;
+  const bodyStrict = body.filter(l =>
+    l.maxGap < bodySize * 2 && (l.x1 - l.x0) > colSpan * 0.4);
 
   const regions  = [];
   const usedCaps = [];
@@ -238,51 +246,62 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
     const capMid = cap.y + cap.h / 2;
 
     // ── 1순위: 래스터 이미지 rect ──────────────────────────
+    // 진단 결과: 이 PDF의 Figure들은 캡션과 74~87pt 이내.
+    // Table이 오인하는 먼 래스터(188~391pt)는 bodySize*16≈144pt 임계값으로 배제.
+    const RASTER_RADIUS = bodySize * 16;
     const near = rasterRects.filter(r =>
-      Math.abs((r.yMin + r.yMax) / 2 - capMid) < pageH * 0.55);
+      Math.abs((r.yMin + r.yMax) / 2 - capMid) < RASTER_RADIUS);
 
     if (near.length) {
       let yLo = Math.min(...near.map(r => r.yMin));
       let yHi = Math.max(...near.map(r => r.yMax));
 
-      // 표 헤더/레이블 포함: 래스터 경계에 직접 붙어있는 텍스트만 흡수 (최대 3 pass)
-      // NEAR_Y = bodySize(1줄 간격) — 이보다 멀면 본문으로 판단해 포함 안 함
+      // 직접 붙어있는 텍스트만 흡수 (표 헤더, 축 레이블): gap ≤ bodySize
       const NEAR_Y = bodySize;
       for (let pass = 0; pass < 3; pass++) {
         for (const l of lines) {
           if (CAPTION_RE.test(l.text)) continue;
           const lTop = l.y + l.h, lBot = l.y;
-          if (lTop > yHi && lBot - yHi <= NEAR_Y) yHi = lTop; // 바로 위 텍스트
-          if (lBot < yLo && yLo - lTop <= NEAR_Y) yLo = lBot; // 바로 아래 텍스트
+          if (lTop > yHi && lBot - yHi <= NEAR_Y) yHi = lTop;
+          if (lBot < yLo && yLo - lTop <= NEAR_Y) yLo = lBot;
         }
       }
 
       regions.push({
         yLo: Math.max(0, yLo - bodySize * 0.3),
         yHi: Math.min(pageH, yHi + bodySize * 0.3),
-        x0: colX0,
-        x1: colX1,
+        x0: colX0, x1: colX1,
         caption: cap.text,
       });
       usedCaps.push(cap);
       continue;
     }
 
-    // ── 2순위: 캡션 위/아래 텍스트 갭 (벡터/표) ──────────
+    // ── 2순위: 캡션 위/아래 텍스트 갭 ──────────────────────
+    // bodyStrict(표 행 제외) 기준으로 갭을 감지해 텍스트 전용 표도 올바르게 포착
     const capTop = cap.y + cap.h;
     const capBot = cap.y;
     let aboveBase = pageH;
-    for (const b of body)
+    for (const b of bodyStrict)
       if (b.y > capTop + bodySize * 1.5 && b.y < aboveBase) aboveBase = b.y;
     const spanAbove = aboveBase - capTop;
 
     let belowTop = 0;
-    for (const b of body)
+    for (const b of bodyStrict)
       if (b.y + b.h < capBot - bodySize * 1.5 && b.y + b.h > belowTop) belowTop = b.y + b.h;
     const spanBelow = capBot - belowTop;
 
+    // 표 행이 어느 쪽에 있는지 확인 → 갭 크기보다 우선해서 방향 결정
+    const tableRows = lines.filter(l => l.maxGap > bodySize * 2 && !CAPTION_RE.test(l.text));
+    const tableRowsAbove = tableRows.some(l => l.y >= capTop && l.y < aboveBase);
+    const tableRowsBelow = tableRows.some(l => l.y + l.h <= capBot && l.y + l.h > belowTop);
+
     let yLo, yHi;
-    if (spanAbove >= spanBelow && spanAbove > bodySize * 2.5) {
+    if (tableRowsAbove && spanAbove > bodySize * 2) {
+      yHi = aboveBase; yLo = capTop;
+    } else if (tableRowsBelow && spanBelow > bodySize * 2) {
+      yHi = capBot; yLo = belowTop;
+    } else if (spanAbove >= spanBelow && spanAbove > bodySize * 2.5) {
       yHi = aboveBase; yLo = capTop;
     } else if (spanBelow > bodySize * 2.5) {
       yHi = capBot; yLo = belowTop;
@@ -390,7 +409,7 @@ async function extractBlocks(pdf, onProgress) {
     for (const g of regions) {
       // 이 그림 위의 텍스트 라인
       const seg = [];
-      while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi + bodySize * 0.3)
+      while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
         seg.push(sortedLines[ptr++]);
       linesToBlocks(seg, bodySize, blocks);
 

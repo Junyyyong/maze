@@ -10,7 +10,12 @@
     "cap:open:android": "npx cap open android",
     "cap:build:android": "npx cap build android"
   },
-  "keywords": ["ebook", "pdf", "reader", "capacitor"],
+  "keywords": [
+    "ebook",
+    "pdf",
+    "reader",
+    "capacitor"
+  ],
   "author": "Paper Shelf",
   "license": "MIT",
   "dependencies": {
@@ -21,7 +26,8 @@
     "@capacitor/status-bar": "^6.0.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.0",
     "@capacitor/cli": "^6.0.0",
-    "@capacitor/assets": "^3.0.0"
+    "pdfjs-dist": "^6.0.227"
   }
 }
