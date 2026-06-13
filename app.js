@@ -219,25 +219,80 @@ async function getImageRects(page) {
   return merged;
 }
 
-// 방법 2: 본문 텍스트 사이 큰 공백 감지 (벡터 그래픽/표 용 fallback)
-// 축 레이블 같은 작은 텍스트(h < 0.65 * bodySize)는 무시
-function findFigureGaps(lines, pageH, bodySize) {
-  const bodyLines = lines.filter(l => l.h >= bodySize * 0.65);
-  if (bodyLines.length < 2) return [];
-  // 최소 5× bodySize AND 최소 55 PDF 단위 이상이어야 진짜 그림으로 판단
-  const MIN_GAP = Math.max(bodySize * 5.0, 55);
-  const MARGIN  = bodySize * 2;
-  const sorted  = [...bodyLines].sort((a, b) => b.y - a.y);
-  const gaps    = [];
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const above = sorted[i], below = sorted[i + 1];
-    const yTop    = above.y;
-    const yBottom = below.y + below.h;
-    const gap = yTop - yBottom;
-    if (gap > MIN_GAP && yBottom > MARGIN && yTop < pageH - MARGIN)
-      gaps.push({ yTop, yBottom });
+// 방법 2: 캡션 기반 그림/표 영역 감지
+// 논문은 항상 "Figure 1 / Table 1 / 그림 1 / 표 1" 형태로 캡션을 붙임.
+// 캡션을 기준점(anchor)으로 삼아 인접한 시각 영역(빈 공백 + 래스터)을 그림으로 인식.
+// 캡션 텍스트도 함께 추출해 사용자가 "이 그림이 맞는지" 확인할 수 있게 함.
+const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
+
+function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
+  const isBody = l => l.h >= bodySize * 0.62 && !CAPTION_RE.test(l.text);
+  const body   = lines.filter(isBody);
+  const colX0  = body.length ? Math.min(...body.map(l => l.x0)) : pageW * 0.12;
+  const colX1  = body.length ? Math.max(...body.map(l => l.x1)) : pageW * 0.88;
+
+  const captions = lines.filter(l => CAPTION_RE.test(l.text));
+  const regions  = [];
+  const usedCaps = [];
+
+  for (const cap of captions) {
+    const capTop = cap.y + cap.h;           // 캡션 글자 윗변
+    const capBot = cap.y;                    // 캡션 베이스라인
+    // 캡션 위쪽 빈 공백 (그림이 캡션 위에 있는 일반적 경우)
+    let aboveBase = pageH;
+    for (const b of body) if (b.y >= capTop - 1) aboveBase = Math.min(aboveBase, b.y);
+    const spanAbove = aboveBase - capTop;
+    // 캡션 아래쪽 빈 공백 (표 캡션이 표 위에 있는 경우)
+    let belowTop = 0;
+    for (const b of body) if (b.y + b.h <= capBot + 1) belowTop = Math.max(belowTop, b.y + b.h);
+    const spanBelow = capBot - belowTop;
+
+    // 시각 영역(캡션 제외): 더 큰 빈 공백 쪽을 그림으로 채택
+    let yLo, yHi;
+    if (spanAbove >= spanBelow) { yHi = aboveBase; yLo = capTop; }
+    else                        { yHi = capBot;    yLo = belowTop; }
+
+    const visualSpan = Math.max(spanAbove, spanBelow);
+    const hasRaster  = rasterRects.some(r => r.yMin < yHi && r.yMax > yLo);
+    // 진짜 그림 판단: 충분히 큰 공백 OR 래스터 이미지 포함
+    if (visualSpan < bodySize * 2.2 && !hasRaster) continue;
+    if (yHi - yLo < bodySize * 1.2) continue;
+
+    regions.push({ yLo, yHi, x0: colX0, x1: colX1, caption: cap.text });
+    usedCaps.push(cap);
   }
-  return gaps;
+
+  // 캡션이 없는 래스터 이미지(사진 등)도 영역으로 추가
+  for (const r of rasterRects) {
+    if (regions.some(g => r.yMin < g.yHi && r.yMax > g.yLo)) continue;
+    regions.push({ yLo: r.yMin, yHi: r.yMax, x0: r.xMin, x1: r.xMax, caption: '' });
+  }
+  if (!regions.length) return { regions: [], usedCaps };
+
+  // x 범위 보정: 래스터 + 영역 내부 텍스트(축 레이블/표 셀)로 실제 폭에 맞춤
+  for (const g of regions) {
+    let x0 = g.x0, x1 = g.x1;
+    for (const r of rasterRects)
+      if (r.yMin < g.yHi && r.yMax > g.yLo) { x0 = Math.min(x0, r.xMin); x1 = Math.max(x1, r.xMax); }
+    for (const l of lines)
+      if (l.y >= g.yLo - 1 && l.y <= g.yHi + 1) { x0 = Math.min(x0, l.x0); x1 = Math.max(x1, l.x1); }
+    g.x0 = Math.max(0, x0); g.x1 = Math.min(pageW, x1);
+  }
+
+  // 겹치는 영역 병합 (위→아래)
+  regions.sort((a, b) => b.yHi - a.yHi);
+  const merged = [];
+  for (const g of regions) {
+    const last = merged[merged.length - 1];
+    if (last && g.yHi > last.yLo - bodySize * 0.5) {
+      last.yLo = Math.min(last.yLo, g.yLo);
+      last.yHi = Math.max(last.yHi, g.yHi);
+      last.x0  = Math.min(last.x0, g.x0);
+      last.x1  = Math.max(last.x1, g.x1);
+      if (!last.caption && g.caption) last.caption = g.caption;
+    } else merged.push({ ...g });
+  }
+  return { regions: merged, usedCaps };
 }
 
 function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pdfXMin, pdfXMax, pageH, scale) {
@@ -290,47 +345,44 @@ async function extractBlocks(pdf, onProgress) {
 
     // 텍스트 없는 페이지 → 전체 그림
     if (lines.length === 0) {
-      const { cv } = await renderPageCanvas(page, 1.5);
-      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.80));
+      const { cv } = await renderPageCanvas(page, 2.0);
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
       if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
       onProgress(p, pdf.numPages); continue;
     }
 
-    // 래스터 이미지 없으면 갭 감지로 벡터 그래픽 탐지
-    const rects = imageRects.length
-      ? imageRects
-      : findFigureGaps(lines, pageH, bodySize).map(g =>
-          ({ xMin: 0, xMax: pageW, yMin: g.yBottom, yMax: g.yTop }));
+    // 캡션 기반 그림/표 영역 감지
+    const { regions, usedCaps } = buildFigureRegions(lines, imageRects, pageW, pageH, bodySize);
 
-    if (!rects.length) {
+    if (!regions.length) {
       linesToBlocks(lines, bodySize, blocks);
       onProgress(p, pdf.numPages); continue;
     }
 
-    const SCALE = 1.5;
+    const SCALE = 2.0;
     const { cv } = await renderPageCanvas(page, SCALE);
 
-    // 이미지 rect와 텍스트 라인을 위→아래 순으로 인터리브
-    const sortedImgs  = [...rects].sort((a,b) => b.yMax - a.yMax);
-    const sortedLines = [...lines].sort((a,b) => b.y - a.y);
+    // 캡션 줄은 본문 흐름에서 제외(그림 라벨로 따로 표시)
+    const used = new Set(usedCaps);
+    const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
     let ptr = 0;
 
-    for (const img of sortedImgs) {
-      // 이 이미지 위의 텍스트 라인
+    for (const g of regions) {
+      // 이 그림 위의 텍스트 라인
       const seg = [];
-      while (ptr < sortedLines.length && sortedLines[ptr].y > img.yMax + bodySize * 0.3)
+      while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi + bodySize * 0.3)
         seg.push(sortedLines[ptr++]);
       linesToBlocks(seg, bodySize, blocks);
 
-      // 그림 영역 캡처 (xMin/xMax로 좌우 여백 제거)
-      const blob = await cropCanvasRegion(cv, img.yMax, img.yMin, img.xMin, img.xMax, pageH, SCALE);
-      if (blob) blocks.push({ type: 'fig', blob });
+      // 그림 영역 캡처 (x0/x1로 좌우 여백 제거, 고해상도)
+      const blob = await cropCanvasRegion(cv, g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
+      if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
 
-      // 이미지 내부 텍스트 항목(축 레이블 등) 건너뜀
-      while (ptr < sortedLines.length && sortedLines[ptr].y >= img.yMin - bodySize * 0.5)
+      // 그림 내부 텍스트(축 레이블/표 셀) 건너뜀
+      while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5)
         ptr++;
     }
-    // 이미지 아래 남은 텍스트
+    // 그림 아래 남은 텍스트
     linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
 
     onProgress(p, pdf.numPages);
@@ -558,13 +610,19 @@ function renderReaderContent() {
   currentBook.blocks.forEach((b, i) => {
     let node;
     if (b.type === 'fig') {
-      node = document.createElement('div');
+      node = document.createElement('figure');
       node.className = 'blk fig-block';
       const img = document.createElement('img');
       img.src = URL.createObjectURL(b.blob);
-      img.alt = 'Figure'; img.dataset.fig = '1';
+      img.alt = b.caption || 'Figure'; img.dataset.fig = '1';
       img.addEventListener('click', e => { e.stopPropagation(); figZoomOpen(img.src); });
       node.appendChild(img);
+      if (b.caption) {
+        const cap = document.createElement('figcaption');
+        cap.className = 'fig-cap';
+        cap.textContent = b.caption;
+        node.appendChild(cap);
+      }
     } else {
       node = document.createElement(b.type === 'p' ? 'p' : b.type);
       node.className = 'blk';

@@ -308,6 +308,14 @@ body.tts-on .reader-content {
 }
 [data-theme="dark"] .fig-block img { filter: brightness(0.88) contrast(1.05); }
 [data-eink] .fig-block img { filter: grayscale(1) contrast(1.15); box-shadow: none; border: 1px solid #aaa; }
+.fig-cap {
+  margin: 0.6em auto 0;
+  font-size: 0.86em;
+  line-height: 1.45;
+  color: var(--fg2);
+  text-align: center;
+  max-width: 92%;
+}
 
 /* ── 그림 확대 모달 ─────────────────────────── */
 .fig-zoom-modal {
