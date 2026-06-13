@@ -382,8 +382,11 @@ async function extractBlocks(pdf, onProgress) {
     ]);
     let lines = groupIntoLines(content.items);
     lines = reorderColumns(lines, pageW);
-    // 페이지 꼬리말/머리말 제거: 하단 3줄 높이 이내의 짧은 라인 (e.g. "www.aodr.org 279")
-    lines = lines.filter(l => l.y >= bodySize * 3 || l.text.length > 80 || CAPTION_RE.test(l.text));
+    // 페이지 꼬리말(하단)/머리말(상단) 제거: 짧은 라인만 필터 (실제 본문은 유지)
+    lines = lines.filter(l =>
+      (l.y >= bodySize * 3 && l.y <= pageH - bodySize * 2) ||
+      l.text.length > 80 ||
+      CAPTION_RE.test(l.text));
 
     // 텍스트 없는 페이지 → 전체 그림
     if (lines.length === 0) {
@@ -429,6 +432,17 @@ async function extractBlocks(pdf, onProgress) {
 
     onProgress(p, pdf.numPages);
   }
+  // 캡션 있는 그림 직후 캡션 없는 그림 → 다음 페이지 연속 블록으로 표시 (예: 다중 페이지 표)
+  let prevFigCaption = '';
+  for (const b of blocks) {
+    if (b.type === 'fig') {
+      if (b.caption) prevFigCaption = b.caption;
+      else if (prevFigCaption) b.caption = prevFigCaption + ' (이어서)';
+    } else {
+      prevFigCaption = ''; // 본문 텍스트가 나오면 연속성 초기화
+    }
+  }
+
   return blocks.filter(b => b.type === 'fig' || b.text?.trim());
 }
 
