@@ -219,72 +219,81 @@ async function getImageRects(page) {
   return merged;
 }
 
-// 방법 2: 캡션 기반 그림/표 영역 감지
-// 논문은 항상 "Figure 1 / Table 1 / 그림 1 / 표 1" 형태로 캡션을 붙임.
-// 캡션을 기준점(anchor)으로 삼아 인접한 시각 영역(빈 공백 + 래스터)을 그림으로 인식.
-// 캡션 텍스트도 함께 추출해 사용자가 "이 그림이 맞는지" 확인할 수 있게 함.
+// 캡션 기반 그림/표 영역 감지
+// 1순위: 래스터 이미지 rect를 직접 기준으로 삼음 (정밀)
+// 2순위: 캡션 근처 텍스트 갭 (벡터/표 fallback)
 const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
 
 function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
-  const isBody = l => l.h >= bodySize * 0.62 && !CAPTION_RE.test(l.text);
-  const body   = lines.filter(isBody);
-  const colX0  = body.length ? Math.min(...body.map(l => l.x0)) : pageW * 0.12;
-  const colX1  = body.length ? Math.max(...body.map(l => l.x1)) : pageW * 0.88;
-
   const captions = lines.filter(l => CAPTION_RE.test(l.text));
+  const body     = lines.filter(l => l.h >= bodySize * 0.65 && !CAPTION_RE.test(l.text));
   const regions  = [];
   const usedCaps = [];
 
   for (const cap of captions) {
-    const capTop = cap.y + cap.h;           // 캡션 글자 윗변
-    const capBot = cap.y;                    // 캡션 베이스라인
-    // 캡션 위쪽 빈 공백 (그림이 캡션 위에 있는 일반적 경우)
+    const capMid = cap.y + cap.h / 2;
+
+    // ── 1순위: 캡션 근처 래스터 이미지 rect ──────────────
+    const near = rasterRects.filter(r =>
+      Math.abs((r.yMin + r.yMax) / 2 - capMid) < pageH * 0.55);
+
+    if (near.length) {
+      const xMin = Math.min(...near.map(r => r.xMin));
+      const xMax = Math.max(...near.map(r => r.xMax));
+      const yMin = Math.min(...near.map(r => r.yMin));
+      const yMax = Math.max(...near.map(r => r.yMax));
+      // 래스터 rect 기준으로 y 범위 확장: 위쪽 여백 약간 포함
+      const pad = bodySize * 0.8;
+      regions.push({
+        yLo: Math.max(0, yMin - pad),
+        yHi: Math.min(pageH, yMax + pad),
+        x0: Math.max(0, xMin - 6),
+        x1: Math.min(pageW, xMax + 6),
+        caption: cap.text,
+      });
+      usedCaps.push(cap);
+      continue;
+    }
+
+    // ── 2순위: 캡션 위/아래 텍스트 갭 (벡터/표) ──────────
+    const capTop = cap.y + cap.h;
+    const capBot = cap.y;
+    // 캡션과 가까운 텍스트는 그림 내부일 수 있으니 bodySize*1.5 여유 두고 탐색
     let aboveBase = pageH;
-    for (const b of body) if (b.y >= capTop - 1) aboveBase = Math.min(aboveBase, b.y);
+    for (const b of body)
+      if (b.y > capTop + bodySize * 1.5 && b.y < aboveBase) aboveBase = b.y;
     const spanAbove = aboveBase - capTop;
-    // 캡션 아래쪽 빈 공백 (표 캡션이 표 위에 있는 경우)
+
     let belowTop = 0;
-    for (const b of body) if (b.y + b.h <= capBot + 1) belowTop = Math.max(belowTop, b.y + b.h);
+    for (const b of body)
+      if (b.y + b.h < capBot - bodySize * 1.5 && b.y + b.h > belowTop) belowTop = b.y + b.h;
     const spanBelow = capBot - belowTop;
 
-    // 시각 영역(캡션 제외): 더 큰 빈 공백 쪽을 그림으로 채택
     let yLo, yHi;
-    if (spanAbove >= spanBelow) { yHi = aboveBase; yLo = capTop; }
-    else                        { yHi = capBot;    yLo = belowTop; }
+    if (spanAbove >= spanBelow && spanAbove > bodySize * 2.5) {
+      yHi = aboveBase; yLo = capTop;
+    } else if (spanBelow > bodySize * 2.5) {
+      yHi = capBot; yLo = belowTop;
+    } else continue;
 
-    const visualSpan = Math.max(spanAbove, spanBelow);
-    const hasRaster  = rasterRects.some(r => r.yMin < yHi && r.yMax > yLo);
-    // 진짜 그림 판단: 충분히 큰 공백 OR 래스터 이미지 포함
-    if (visualSpan < bodySize * 2.2 && !hasRaster) continue;
-    if (yHi - yLo < bodySize * 1.2) continue;
-
-    regions.push({ yLo, yHi, x0: colX0, x1: colX1, caption: cap.text });
+    regions.push({ yLo, yHi, x0: 0, x1: pageW, caption: cap.text });
     usedCaps.push(cap);
   }
 
-  // 캡션이 없는 래스터 이미지(사진 등)도 영역으로 추가
+  // ── 캡션 없는 래스터 이미지 (사진 등) ──────────────────
   for (const r of rasterRects) {
-    if (regions.some(g => r.yMin < g.yHi && r.yMax > g.yLo)) continue;
+    if (regions.some(g => r.yMin < g.yHi + bodySize && r.yMax > g.yLo - bodySize)) continue;
     regions.push({ yLo: r.yMin, yHi: r.yMax, x0: r.xMin, x1: r.xMax, caption: '' });
   }
+
   if (!regions.length) return { regions: [], usedCaps };
 
-  // x 범위 보정: 래스터 + 영역 내부 텍스트(축 레이블/표 셀)로 실제 폭에 맞춤
-  for (const g of regions) {
-    let x0 = g.x0, x1 = g.x1;
-    for (const r of rasterRects)
-      if (r.yMin < g.yHi && r.yMax > g.yLo) { x0 = Math.min(x0, r.xMin); x1 = Math.max(x1, r.xMax); }
-    for (const l of lines)
-      if (l.y >= g.yLo - 1 && l.y <= g.yHi + 1) { x0 = Math.min(x0, l.x0); x1 = Math.max(x1, l.x1); }
-    g.x0 = Math.max(0, x0); g.x1 = Math.min(pageW, x1);
-  }
-
-  // 겹치는 영역 병합 (위→아래)
+  // 위→아래 정렬 후 겹치는 영역 병합
   regions.sort((a, b) => b.yHi - a.yHi);
   const merged = [];
   for (const g of regions) {
     const last = merged[merged.length - 1];
-    if (last && g.yHi > last.yLo - bodySize * 0.5) {
+    if (last && g.yHi > last.yLo - bodySize) {
       last.yLo = Math.min(last.yLo, g.yLo);
       last.yHi = Math.max(last.yHi, g.yHi);
       last.x0  = Math.min(last.x0, g.x0);
