@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Paper Shelf — 논문 이북 리더</title>
-  <meta name="theme-color" content="#1f2430">
+  <title>Paper Shelf</title>
+  <meta name="theme-color" id="themeColorMeta" content="#F8F6F1">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
@@ -12,48 +12,85 @@
 </head>
 <body>
 
-  <!-- ===== 서재 화면 ===== -->
+  <!-- ===== 서재 ===== -->
   <main id="libraryView" class="view">
     <header class="lib-header">
-      <h1>📚 Paper Shelf</h1>
-      <label class="btn btn-primary" for="fileInput">+ PDF 추가</label>
-      <input type="file" id="fileInput" accept="application/pdf" hidden>
+      <div class="lib-brand">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect x="3" y="4" width="7" height="20" rx="2" fill="var(--accent)"/>
+          <rect x="11" y="6" width="7" height="18" rx="2" fill="var(--accent2)"/>
+          <rect x="19" y="8" width="6" height="16" rx="2" fill="var(--accent3)"/>
+        </svg>
+        <span>Paper Shelf</span>
+      </div>
+      <div class="lib-actions">
+        <button id="libDarkBtn" class="icon-btn" aria-label="테마 전환">🌙</button>
+        <label class="btn btn-primary" for="fileInput">+ PDF 추가</label>
+        <input type="file" id="fileInput" accept="application/pdf" hidden>
+      </div>
     </header>
     <p class="lib-hint" id="libHint">논문 PDF를 추가하면 전자책처럼 읽을 수 있어요.</p>
     <div id="bookGrid" class="book-grid"></div>
   </main>
 
-  <!-- ===== 리더 화면 ===== -->
+  <!-- ===== 리더 ===== -->
   <section id="readerView" class="view" hidden>
     <div id="progressBar"><div id="progressFill"></div></div>
+
     <header class="reader-topbar">
-      <button id="backBtn" class="icon-btn" title="서재로">←</button>
+      <button id="backBtn" class="icon-btn" aria-label="서재로">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 5L7 10L12 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <span id="readerTitle" class="reader-title"></span>
-      <span id="progressLabel" class="progress-label"></span>
-      <button id="fontDownBtn" class="icon-btn" title="글자 작게">A−</button>
-      <button id="fontUpBtn" class="icon-btn" title="글자 크게">A＋</button>
-      <button id="hlListBtn" class="icon-btn" title="하이라이트 목록">🖍</button>
+      <div class="topbar-right">
+        <span id="progressLabel" class="progress-label"></span>
+        <button id="fontDownBtn" class="icon-btn" aria-label="글자 작게"><span class="font-icon sm">A</span></button>
+        <button id="fontUpBtn" class="icon-btn" aria-label="글자 크게"><span class="font-icon lg">A</span></button>
+        <button id="xlParaBtn" class="icon-btn" aria-label="단락 번역" title="현재 단락 번역">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5h8M7 3v2M3 5c0 3.3 2.7 6 6 6M9 11c-1.2 0-2.3-.4-3.2-1M11 5h6M14 3v2M19 15l-5-5M14 10c0 3.3-2.7 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="ttsBtn" class="icon-btn" aria-label="읽어주기">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 7.5h3l4-3v11l-4-3H3v-5zM14 6.5a5 5 0 010 7M16.5 4a8.5 8.5 0 010 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="hlListBtn" class="icon-btn" aria-label="하이라이트 목록">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="9" width="14" height="2.5" rx="1.25" fill="var(--hl-bg-solid)"/><path d="M3 5h14M3 15h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <button id="darkBtn" class="icon-btn" aria-label="테마 전환">🌙</button>
+      </div>
     </header>
+
     <article id="readerContent" class="reader-content"></article>
   </section>
 
-  <!-- 하이라이트 목록 패널 -->
-  <aside id="hlPanel" class="hl-panel" hidden>
-    <div class="hl-panel-head">
+  <!-- 하이라이트 패널 -->
+  <aside id="hlPanel" class="side-panel" hidden>
+    <div class="panel-head">
       <strong>하이라이트 · 메모</strong>
       <button id="hlPanelClose" class="icon-btn">✕</button>
     </div>
-    <div id="hlPanelList"></div>
+    <div id="hlPanelList" class="panel-list"></div>
   </aside>
 
-  <!-- 텍스트 선택 메뉴 -->
-  <div id="selMenu" class="popup" hidden>
-    <button id="selHighlight">🖍 하이라이트</button>
-    <button id="selMemo">📝 메모</button>
+  <!-- 선택 메뉴 -->
+  <div id="selMenu" class="sel-menu" hidden>
+    <button id="selHighlight">
+      <svg width="15" height="15" viewBox="0 0 20 20"><rect x="2" y="9" width="16" height="4" rx="2" fill="currentColor" opacity=".7"/><path d="M2 9h16M2 13h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      하이라이트
+    </button>
+    <div class="sel-divider"></div>
+    <button id="selMemo">
+      <svg width="15" height="15" viewBox="0 0 20 20"><path d="M4 4h12v10l-3 3H4z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M8 8h4M8 11h2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      메모
+    </button>
+    <div class="sel-divider"></div>
+    <button id="selTranslate">
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M3 5h8M7 3v2M3 5c0 3.3 2.7 6 6 6M9 11c-1.2 0-2.3-.4-3.2-1M11 5h6M14 3v2M19 15l-5-5M14 10c0 3.3-2.7 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      번역
+    </button>
   </div>
 
-  <!-- 메모 편집 팝업 -->
-  <div id="notePopup" class="popup note-popup" hidden>
+  <!-- 메모 팝업 -->
+  <div id="notePopup" class="float-card note-popup" hidden>
     <blockquote id="noteQuote"></blockquote>
     <textarea id="noteText" rows="3" placeholder="메모를 입력하세요…"></textarea>
     <div class="note-actions">
@@ -62,7 +99,53 @@
     </div>
   </div>
 
-  <!-- 추출 진행 오버레이 -->
+  <!-- 번역 바텀 시트 -->
+  <div id="xlOverlay" class="sheet-overlay" hidden></div>
+  <div id="xlSheet" class="bottom-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div class="sheet-lang-badge" id="xlLangBadge">EN → KO</div>
+      <button id="xlClose" class="icon-btn">✕</button>
+    </div>
+    <div class="xl-original" id="xlOriginal"></div>
+    <div class="xl-arrow">↓</div>
+    <div class="xl-result-wrap">
+      <div id="xlSpinner" class="spinner sm-spinner"></div>
+      <p id="xlText" class="xl-text" hidden></p>
+    </div>
+    <div class="sheet-actions" id="xlActions" hidden>
+      <button id="xlCopy" class="btn btn-outline">복사</button>
+      <button id="xlMemo" class="btn btn-primary">메모로 저장</button>
+    </div>
+  </div>
+
+  <!-- TTS 플레이어 바 -->
+  <div id="ttsBar" class="tts-bar" hidden>
+    <div class="tts-info">
+      <div class="tts-playing-icon">
+        <span></span><span></span><span></span>
+      </div>
+      <p id="ttsText" class="tts-text"></p>
+    </div>
+    <div class="tts-controls">
+      <button id="ttsPrevBtn" class="icon-btn tts-btn" aria-label="이전 단락">
+        <svg width="18" height="18" viewBox="0 0 20 20"><path d="M4 5v10M16 5L8 10l8 5V5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      </button>
+      <button id="ttsPauseBtn" class="tts-play-btn" aria-label="재생/일시정지">
+        <svg id="ttsPlayIcon" width="20" height="20" viewBox="0 0 20 20"><path d="M7 5l9 5-9 5V5z" fill="currentColor"/></svg>
+        <svg id="ttsPauseIcon" width="20" height="20" viewBox="0 0 20 20" hidden><rect x="5" y="4" width="3.5" height="12" rx="1.5" fill="currentColor"/><rect x="11.5" y="4" width="3.5" height="12" rx="1.5" fill="currentColor"/></svg>
+      </button>
+      <button id="ttsNextBtn" class="icon-btn tts-btn" aria-label="다음 단락">
+        <svg width="18" height="18" viewBox="0 0 20 20"><path d="M16 5v10M4 5l8 5-8 5V5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      </button>
+      <button id="ttsRateBtn" class="tts-rate-btn" aria-label="재생 속도">1.0×</button>
+      <button id="ttsStopBtn" class="icon-btn tts-btn" aria-label="정지">
+        <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 로딩 오버레이 -->
   <div id="extractOverlay" class="overlay" hidden>
     <div class="overlay-box">
       <div class="spinner"></div>

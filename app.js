@@ -1,4 +1,3 @@
-/* Paper Shelf — 논문 PDF 이북 리더 */
 'use strict';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
@@ -55,19 +54,14 @@ async function dbDelete(id) {
   });
 }
 
-/* ===================== PDF → 리플로우 텍스트 추출 ===================== */
+/* ===================== PDF 추출 ===================== */
 
-/**
- * 페이지의 텍스트 아이템을 줄(line) 단위로 묶는다.
- * 같은 줄 판정: y 좌표 차이가 글자 높이의 절반 이내.
- */
 function groupIntoLines(items) {
   const frags = items
     .filter(it => it.str.trim() !== '')
     .map(it => ({
       str: it.str,
-      x: it.transform[4],
-      y: it.transform[5],
+      x: it.transform[4], y: it.transform[5],
       w: it.width,
       h: it.height || Math.abs(it.transform[3]) || 10,
     }));
@@ -77,19 +71,14 @@ function groupIntoLines(items) {
   const lines = [];
   for (const f of frags) {
     const last = lines[lines.length - 1];
-    if (last && Math.abs(last.y - f.y) < f.h * 0.5) {
-      last.frags.push(f);
-    } else {
-      lines.push({ y: f.y, frags: [f] });
-    }
+    if (last && Math.abs(last.y - f.y) < f.h * 0.5) last.frags.push(f);
+    else lines.push({ y: f.y, frags: [f] });
   }
 
   return lines.map(l => {
     l.frags.sort((a, b) => a.x - b.x);
-    let text = '';
-    let prevEnd = null;
+    let text = '', prevEnd = null;
     for (const f of l.frags) {
-      // 조각 사이 간격이 글자폭 이상이면 공백 삽입
       if (prevEnd !== null && f.x - prevEnd > f.h * 0.25 && !text.endsWith(' ')) text += ' ';
       text += f.str;
       prevEnd = f.x + f.w;
@@ -105,7 +94,6 @@ function groupIntoLines(items) {
   }).filter(l => l.text !== '');
 }
 
-/** 2단 레이아웃이면 좌→우 컬럼 순서로 줄을 재배열한다. */
 function reorderColumns(lines, pageWidth) {
   const mid = pageWidth / 2;
   let left = 0, right = 0, span = 0;
@@ -114,41 +102,31 @@ function reorderColumns(lines, pageWidth) {
     else if (l.x0 > mid - pageWidth * 0.05) right++;
     else span++;
   }
-  // 양쪽 컬럼에 충분한 줄이 있고, 폭 전체를 쓰는 줄이 적으면 2단으로 판단
   if (left < 4 || right < 4 || span > (left + right) * 0.5) return lines;
-
   const spanning = [], leftCol = [], rightCol = [];
   for (const l of lines) {
     if (l.x1 < mid + pageWidth * 0.05) leftCol.push(l);
     else if (l.x0 > mid - pageWidth * 0.05) rightCol.push(l);
     else spanning.push(l);
   }
-  // 상단 가로 전체 줄(제목 등) → 왼쪽 컬럼 → 오른쪽 컬럼
   return [...spanning, ...leftCol, ...rightCol];
 }
 
-/** 줄들을 문단/제목 블록으로 병합한다. */
 function linesToBlocks(lines, bodySize, blocks) {
-  let para = '';
-  let prev = null;
-
+  let para = '', prev = null;
   const flush = () => {
     const t = para.trim();
     if (t) blocks.push({ type: 'p', text: t });
     para = '';
   };
-
   for (const line of lines) {
-    // 페이지 번호 등 잡음 제거
     if (/^\d{1,4}$/.test(line.text)) continue;
-
     const isHeading = line.h > bodySize * 1.15 && line.text.length < 120;
     if (isHeading) {
       flush();
       const level = line.h > bodySize * 1.45 ? 'h2' : 'h3';
       const last = blocks[blocks.length - 1];
-      // 여러 줄 제목은 직전 제목 블록에 이어붙인다
-      if (last && last.type === level && prev && prev.isHeading &&
+      if (last && last.type === level && prev?.isHeading &&
           Math.abs(prev.y - line.y) < line.h * 2.2) {
         last.text += ' ' + line.text;
       } else {
@@ -157,13 +135,9 @@ function linesToBlocks(lines, bodySize, blocks) {
       prev = { y: line.y, h: line.h, isHeading: true };
       continue;
     }
-
-    // 문단 경계: 줄 간격이 크거나, 이전 줄이 제목이었던 경우
     if (prev && (prev.isHeading || prev.y - line.y > line.h * 1.9)) flush();
-
-    if (para.endsWith('-')) para = para.slice(0, -1) + line.text; // 하이픈 연결
+    if (para.endsWith('-')) para = para.slice(0, -1) + line.text;
     else para += (para ? ' ' : '') + line.text;
-
     prev = { y: line.y, h: line.h, isHeading: false };
   }
   flush();
@@ -171,7 +145,6 @@ function linesToBlocks(lines, bodySize, blocks) {
 
 async function extractBlocks(pdf, onProgress) {
   const blocks = [];
-  // 본문 글자 크기 추정: 첫 3페이지 줄 높이의 최빈값
   const sizes = [];
   for (let p = 1; p <= Math.min(3, pdf.numPages); p++) {
     const page = await pdf.getPage(p);
@@ -191,19 +164,52 @@ async function extractBlocks(pdf, onProgress) {
     linesToBlocks(lines, bodySize, blocks);
     onProgress(p, pdf.numPages);
   }
-
-  // 너무 짧은 고아 블록(캡션 조각 등)이라도 일단 유지하되, 빈 블록만 제거
   return blocks.filter(b => b.text.trim() !== '');
 }
+
+/* ===================== 다크모드 ===================== */
+
+function applyTheme(dark) {
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const meta = document.getElementById('themeColorMeta');
+  if (meta) meta.content = dark ? '#18181C' : '#F8F6F1';
+  const btns = document.querySelectorAll('#darkBtn, #libDarkBtn');
+  btns.forEach(b => { b.textContent = dark ? '☀️' : '🌙'; });
+  localStorage.setItem('theme', dark ? 'dark' : 'light');
+}
+
+function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme !== 'dark');
+}
+
+(function initTheme() {
+  const saved = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ? saved === 'dark' : prefersDark);
+})();
 
 /* ===================== 상태 ===================== */
 
 const $ = id => document.getElementById(id);
 
-let currentBook = null;   // 열려 있는 책 (DB 레코드 전체)
+let currentBook = null;
 let saveTimer = null;
 
 /* ===================== 서재 ===================== */
+
+const COVER_GRADIENTS = [
+  ['#5378B0','#3A5590'], ['#7A5FAF','#563C8A'],
+  ['#3FA89C','#267A70'], ['#C96B3A','#A04A1E'],
+  ['#4EA64E','#317A31'], ['#A64870','#7A2E50'],
+  ['#8A7040','#605018'], ['#4070A0','#284E7E'],
+];
+
+function coverGradient(id) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0x7FFFFFFF;
+  const [c1, c2] = COVER_GRADIENTS[h % COVER_GRADIENTS.length];
+  return `linear-gradient(145deg, ${c1}, ${c2})`;
+}
 
 async function renderLibrary() {
   const books = await dbGetAll();
@@ -217,15 +223,17 @@ async function renderLibrary() {
     const card = document.createElement('div');
     card.className = 'book-card';
     card.innerHTML = `
-      <button class="book-delete" title="삭제">✕</button>
-      <div class="book-cover">📄</div>
+      <button class="book-delete" aria-label="삭제">✕</button>
+      <div class="book-cover" style="background:${coverGradient(b.id)}">
+        <span class="book-cover-icon">📄</span>
+      </div>
       <div class="book-title"></div>
       <div class="book-meta">${b.numPages}쪽 · ${pct}% 읽음</div>
-      <div class="book-progress"><div style="width:${pct}%"></div></div>`;
+      <div class="book-progress"><div class="book-progress-fill" style="width:${pct}%"></div></div>`;
     card.querySelector('.book-title').textContent = b.title;
     card.querySelector('.book-delete').onclick = async e => {
       e.stopPropagation();
-      if (confirm(`"${b.title}" 책을 삭제할까요?`)) {
+      if (confirm(`"${b.title}" 을(를) 삭제할까요?`)) {
         await dbDelete(b.id);
         renderLibrary();
       }
@@ -249,9 +257,8 @@ async function addPdf(file) {
     try {
       const meta = await pdf.getMetadata();
       const t = meta.info?.Title?.trim();
-      // 의미 없는 메타데이터 제목(빈 값, untitled, URL 등)은 무시
       if (t && t.length > 2 && !/^(untitled|about:blank|microsoft word|\d+)/i.test(t)) title = t;
-    } catch { /* 메타데이터 없으면 파일명 사용 */ }
+    } catch { /* 파일명 사용 */ }
 
     const blocks = await extractBlocks(pdf, (done, total) => {
       msg.textContent = `텍스트 추출 중… ${done}/${total}쪽`;
@@ -289,15 +296,13 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** 블록 텍스트에 하이라이트 마크를 입혀 HTML로 만든다. */
 function blockHtml(blockIdx, text, highlights) {
   const marks = highlights
     .filter(h => h.block === blockIdx)
     .sort((a, b) => a.start - b.start);
   if (marks.length === 0) return escapeHtml(text);
 
-  let html = '';
-  let pos = 0;
+  let html = '', pos = 0;
   for (const m of marks) {
     const start = Math.max(pos, m.start);
     if (start >= m.end) continue;
@@ -330,12 +335,12 @@ async function openBook(id) {
   currentBook = await dbGet(id);
   if (!currentBook) return;
 
+  ttsStop();
   $('libraryView').hidden = true;
   $('readerView').hidden = false;
   $('readerTitle').textContent = currentBook.title;
   renderReaderContent();
 
-  // 이어읽기: 저장된 블록 위치로 스크롤
   const target = document.querySelector(`.blk[data-idx="${currentBook.progress.block}"]`);
   requestAnimationFrame(() => {
     if (target && currentBook.progress.block > 0) {
@@ -352,10 +357,12 @@ async function openBook(id) {
 }
 
 function closeBook() {
+  ttsStop();
   saveProgressNow();
   currentBook = null;
   $('readerView').hidden = true;
   $('hlPanel').hidden = true;
+  xlClose();
   $('libraryView').hidden = false;
   window.scrollTo(0, 0);
   renderLibrary();
@@ -365,7 +372,7 @@ function closeBook() {
 
 function topVisibleBlock() {
   const blocks = document.querySelectorAll('#readerContent .blk');
-  const top = 70; // 상단바 아래
+  const top = 70;
   for (const el of blocks) {
     if (el.getBoundingClientRect().bottom > top) return Number(el.dataset.idx);
   }
@@ -380,7 +387,6 @@ function updateProgressUI() {
   const percent = scrollable > 0 ? Math.min(1, window.scrollY / scrollable) : 1;
   $('progressFill').style.width = (percent * 100) + '%';
   $('progressLabel').textContent = Math.round(percent * 100) + '%';
-
   currentBook.progress = { block: idx, percent };
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveProgressNow, 800);
@@ -407,7 +413,6 @@ function changeFontSize(delta) {
 
 /* ===================== 하이라이트 / 메모 ===================== */
 
-/** 블록 내 텍스트 노드 기준으로 (node, offset)의 문자 오프셋을 구한다. */
 function offsetInBlock(blockEl, node, offset) {
   let total = 0;
   const walker = document.createTreeWalker(blockEl, NodeFilter.SHOW_TEXT);
@@ -416,16 +421,13 @@ function offsetInBlock(blockEl, node, offset) {
     if (cur === node) return total + offset;
     total += cur.length;
   }
-  // node가 요소인 경우(드물게): 블록 전체 기준 근사값
   return offset === 0 ? 0 : total;
 }
 
-/** 현재 선택 영역을 블록별 {block, start, end, text} 배열로 변환한다. */
 function selectionToRanges() {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
-
   const blockOf = node => {
     const el = node.nodeType === 1 ? node : node.parentElement;
     return el?.closest('#readerContent .blk') || null;
@@ -437,7 +439,6 @@ function selectionToRanges() {
   const sIdx = Number(startBlk.dataset.idx);
   const eIdx = Number(endBlk.dataset.idx);
   const ranges = [];
-
   for (let i = sIdx; i <= eIdx; i++) {
     const blkEl = document.querySelector(`.blk[data-idx="${i}"]`);
     if (!blkEl) continue;
@@ -449,8 +450,8 @@ function selectionToRanges() {
   return ranges.length ? ranges : null;
 }
 
-let pendingRanges = null;  // 선택 메뉴가 떠 있는 동안의 선택 범위
-let editingHlId = null;    // 메모 팝업이 편집 중인 하이라이트
+let pendingRanges = null;
+let editingHlId = null;
 
 function showSelMenu() {
   const sel = window.getSelection();
@@ -462,7 +463,7 @@ function showSelMenu() {
   const rect = sel.getRangeAt(0).getBoundingClientRect();
   const menu = $('selMenu');
   menu.hidden = false;
-  const top = rect.top + window.scrollY - menu.offsetHeight - 8;
+  const top = rect.top + window.scrollY - menu.offsetHeight - 10;
   menu.style.top = Math.max(window.scrollY + 60, top) + 'px';
   menu.style.left = Math.max(8, Math.min(
     rect.left + window.scrollX + rect.width / 2 - menu.offsetWidth / 2,
@@ -474,17 +475,14 @@ function addHighlight(withNote) {
   const groupId = crypto.randomUUID();
   const created = pendingRanges.map((r, i) => ({
     id: pendingRanges.length === 1 ? groupId : `${groupId}-${i}`,
-    ...r,
-    note: '',
+    ...r, note: '',
   }));
   currentBook.highlights.push(...created);
   dbPut(currentBook);
-
   window.getSelection().removeAllRanges();
   $('selMenu').hidden = true;
   pendingRanges = null;
   renderReaderContent();
-
   if (withNote) openNotePopupFor(created[0].id);
 }
 
@@ -492,7 +490,6 @@ function openNotePopupFor(hlId) {
   const hl = currentBook.highlights.find(h => h.id === hlId);
   if (!hl) return;
   editingHlId = hlId;
-
   $('noteQuote').textContent = hl.text;
   $('noteText').value = hl.note || '';
 
@@ -511,16 +508,11 @@ function openNotePopupFor(hlId) {
 
 function saveNote() {
   const hl = currentBook.highlights.find(h => h.id === editingHlId);
-  if (hl) {
-    hl.note = $('noteText').value.trim();
-    dbPut(currentBook);
-    renderReaderContent();
-  }
+  if (hl) { hl.note = $('noteText').value.trim(); dbPut(currentBook); renderReaderContent(); }
   closeNotePopup();
 }
 
 function deleteHighlight() {
-  // 같은 선택에서 나온 멀티블록 하이라이트(id 접두사 공유)도 함께 삭제
   const base = editingHlId.replace(/-\d+$/, '');
   currentBook.highlights = currentBook.highlights.filter(
     h => h.id !== editingHlId && !h.id.startsWith(base + '-'));
@@ -534,7 +526,7 @@ function closeNotePopup() {
   editingHlId = null;
 }
 
-/* ----- 하이라이트 목록 패널 ----- */
+/* ----- 하이라이트 패널 ----- */
 
 function renderHlPanel() {
   const list = $('hlPanelList');
@@ -563,11 +555,209 @@ function renderHlPanel() {
       if (mark) {
         mark.scrollIntoView({ block: 'center' });
         mark.style.outline = '2px solid var(--accent)';
-        setTimeout(() => (mark.style.outline = ''), 1200);
+        setTimeout(() => (mark.style.outline = ''), 1400);
       }
     };
     list.appendChild(item);
   }
+}
+
+/* ===================== 번역 ===================== */
+
+let xlPendingRanges = null;
+let xlTranslated = '';
+
+function detectLang(text) {
+  const kor = (text.match(/[가-힣]/g) || []).length;
+  return kor / text.length > 0.15 ? 'ko' : 'en';
+}
+
+async function xlFetch(text) {
+  if (!text.trim()) return '';
+  const src = detectLang(text);
+  const tgt = src === 'ko' ? 'en' : 'ko';
+  const label = src.toUpperCase() + ' → ' + tgt.toUpperCase();
+  $('xlLangBadge').textContent = label;
+
+  const url = 'https://api.mymemory.translated.net/get?q=' +
+    encodeURIComponent(text.slice(0, 500)) + '&langpair=' + src + '|' + tgt;
+
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('네트워크 오류');
+  const data = await resp.json();
+  if (data.responseStatus !== 200) throw new Error(data.responseMessage || '번역 실패');
+  return data.responseData.translatedText;
+}
+
+function xlOpen(text, ranges) {
+  xlPendingRanges = ranges || null;
+  xlTranslated = '';
+
+  $('xlOriginal').textContent = text.length > 180 ? text.slice(0, 180) + '…' : text;
+  $('xlText').hidden = true;
+  $('xlText').textContent = '';
+  $('xlSpinner').hidden = false;
+  $('xlActions').hidden = true;
+  $('xlOverlay').hidden = false;
+  $('xlSheet').hidden = false;
+
+  xlFetch(text).then(result => {
+    xlTranslated = result;
+    $('xlSpinner').hidden = true;
+    $('xlText').textContent = result;
+    $('xlText').hidden = false;
+    $('xlActions').hidden = false;
+  }).catch(err => {
+    $('xlSpinner').hidden = true;
+    $('xlText').textContent = '번역에 실패했어요: ' + err.message;
+    $('xlText').hidden = false;
+  });
+}
+
+function xlClose() {
+  $('xlSheet').hidden = true;
+  $('xlOverlay').hidden = true;
+  xlPendingRanges = null;
+}
+
+function xlTranslateSelection() {
+  if (!pendingRanges) return;
+  const text = pendingRanges.map(r => r.text).join(' ');
+  const saved = pendingRanges;
+  pendingRanges = null;
+  window.getSelection().removeAllRanges();
+  $('selMenu').hidden = true;
+  xlOpen(text, saved);
+}
+
+function xlTranslateParagraph() {
+  if (!currentBook) return;
+  const idx = topVisibleBlock();
+  const block = currentBook.blocks[idx];
+  if (!block) return;
+  xlOpen(block.text, null);
+}
+
+function xlSaveAsMemo() {
+  if (!xlPendingRanges || !xlTranslated || !currentBook) return;
+  const groupId = crypto.randomUUID();
+  const created = xlPendingRanges.map((r, i) => ({
+    id: xlPendingRanges.length === 1 ? groupId : `${groupId}-${i}`,
+    ...r,
+    note: xlTranslated,
+  }));
+  currentBook.highlights.push(...created);
+  dbPut(currentBook);
+  renderReaderContent();
+  xlClose();
+}
+
+/* ===================== TTS (읽어주기) ===================== */
+
+const TTS_RATES = [0.8, 1.0, 1.2, 1.5, 2.0];
+let ttsRateIdx = 1;
+
+const tts = {
+  active: false,
+  paused: false,
+  blockIdx: 0,
+};
+
+function ttsPlayBlock(idx) {
+  if (!('speechSynthesis' in window)) {
+    alert('이 브라우저는 읽어주기 기능을 지원하지 않아요.');
+    return;
+  }
+  window.speechSynthesis.cancel();
+
+  if (!currentBook || idx >= currentBook.blocks.length) {
+    ttsStop();
+    return;
+  }
+
+  tts.active = true;
+  tts.paused = false;
+  tts.blockIdx = idx;
+
+  document.querySelectorAll('.blk.tts-active').forEach(el => el.classList.remove('tts-active'));
+  const blkEl = document.querySelector(`.blk[data-idx="${idx}"]`);
+  if (blkEl) {
+    blkEl.classList.add('tts-active');
+    const topbarH = 54;
+    const rect = blkEl.getBoundingClientRect();
+    if (rect.top < topbarH || rect.bottom > window.innerHeight * 0.8) {
+      blkEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  const text = currentBook.blocks[idx].text;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = TTS_RATES[ttsRateIdx];
+  utter.lang = detectLang(text) === 'ko' ? 'ko-KR' : 'en-US';
+  utter.onend = () => { if (tts.active && !tts.paused) ttsPlayBlock(idx + 1); };
+  utter.onerror = e => { if (e.error !== 'interrupted') ttsPlayBlock(idx + 1); };
+
+  window.speechSynthesis.speak(utter);
+  document.getElementById('readerView').classList.add('tts-active-padding');
+  updateTtsUI();
+}
+
+function ttsPauseResume() {
+  if (!tts.active) return;
+  if (tts.paused) {
+    window.speechSynthesis.resume();
+    tts.paused = false;
+  } else {
+    window.speechSynthesis.pause();
+    tts.paused = true;
+  }
+  updateTtsUI();
+}
+
+function ttsStop() {
+  window.speechSynthesis?.cancel();
+  tts.active = false;
+  tts.paused = false;
+  document.querySelectorAll('.blk.tts-active').forEach(el => el.classList.remove('tts-active'));
+  document.getElementById('readerView')?.classList.remove('tts-active-padding');
+  updateTtsUI();
+}
+
+function ttsStart() {
+  if (tts.active) {
+    ttsStop();
+    return;
+  }
+  const startIdx = currentBook ? topVisibleBlock() : 0;
+  ttsPlayBlock(startIdx);
+}
+
+function ttsNext() { if (tts.active) ttsPlayBlock(tts.blockIdx + 1); }
+function ttsPrev() { if (tts.active) ttsPlayBlock(Math.max(0, tts.blockIdx - 1)); }
+
+function ttsCycleRate() {
+  ttsRateIdx = (ttsRateIdx + 1) % TTS_RATES.length;
+  $('ttsRateBtn').textContent = TTS_RATES[ttsRateIdx].toFixed(1) + '×';
+  if (tts.active) ttsPlayBlock(tts.blockIdx);
+}
+
+function updateTtsUI() {
+  const bar = $('ttsBar');
+  if (!tts.active) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.toggle('paused', tts.paused);
+
+  const block = currentBook?.blocks[tts.blockIdx];
+  $('ttsText').textContent = block
+    ? block.text.slice(0, 70) + (block.text.length > 70 ? '…' : '')
+    : '';
+
+  $('ttsPlayIcon').hidden = !tts.paused;
+  $('ttsPauseIcon').hidden = tts.paused;
+  $('ttsRateBtn').textContent = TTS_RATES[ttsRateIdx].toFixed(1) + '×';
 }
 
 /* ===================== 이벤트 바인딩 ===================== */
@@ -581,6 +771,9 @@ $('fileInput').addEventListener('change', e => {
 $('backBtn').onclick = closeBook;
 $('fontUpBtn').onclick = () => changeFontSize(1);
 $('fontDownBtn').onclick = () => changeFontSize(-1);
+$('darkBtn').onclick = toggleTheme;
+$('libDarkBtn').onclick = toggleTheme;
+
 $('hlListBtn').onclick = () => {
   const panel = $('hlPanel');
   panel.hidden = !panel.hidden;
@@ -588,16 +781,35 @@ $('hlListBtn').onclick = () => {
 };
 $('hlPanelClose').onclick = () => ($('hlPanel').hidden = true);
 
-// 메뉴를 누를 때 텍스트 선택이 풀리지 않도록 기본 동작 차단
+$('ttsBtn').onclick = ttsStart;
+$('ttsPauseBtn').onclick = ttsPauseResume;
+$('ttsNextBtn').onclick = ttsNext;
+$('ttsPrevBtn').onclick = ttsPrev;
+$('ttsStopBtn').onclick = ttsStop;
+$('ttsRateBtn').onclick = ttsCycleRate;
+
+$('xlParaBtn').onclick = xlTranslateParagraph;
+$('xlOverlay').onclick = xlClose;
+$('xlClose').onclick = xlClose;
+$('xlCopy').onclick = () => {
+  navigator.clipboard.writeText(xlTranslated).then(() => {
+    const btn = $('xlCopy');
+    btn.textContent = '복사됨 ✓';
+    setTimeout(() => { btn.textContent = '복사'; }, 1500);
+  });
+};
+$('xlMemo').onclick = xlSaveAsMemo;
+
 $('selMenu').addEventListener('mousedown', e => e.preventDefault());
 $('selMenu').addEventListener('touchstart', e => e.preventDefault(), { passive: false });
 $('selHighlight').onclick = () => addHighlight(false);
 $('selMemo').onclick = () => addHighlight(true);
+$('selTranslate').onclick = xlTranslateSelection;
+
 $('noteSave').onclick = saveNote;
 $('noteDelete').onclick = deleteHighlight;
 
 document.addEventListener('selectionchange', () => {
-  // 선택이 풀리면 메뉴 숨김 (버튼 클릭은 mousedown 시점에 처리되도록 약간 지연)
   if (window.getSelection().isCollapsed) {
     setTimeout(() => { if (window.getSelection().isCollapsed) $('selMenu').hidden = true; }, 150);
   }
@@ -620,6 +832,13 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 window.addEventListener('beforeunload', saveProgressNow);
+
+// iOS에서 SpeechSynthesis가 백그라운드에서 멈추는 현상 방지
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && tts.active && !tts.paused) {
+    window.speechSynthesis.resume();
+  }
+});
 
 /* ===================== 초기화 ===================== */
 
