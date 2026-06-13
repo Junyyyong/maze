@@ -168,21 +168,72 @@ function linesToBlocks(lines, bodySize, blocks) {
   flush();
 }
 
-/* ── 그림/표 영역 감지 ─────────────────────────── */
+/* ── 그림 영역 감지 ─────────────────────────────── */
 
+// 방법 1: PDF operator list에서 실제 이미지 드로우 명령 추출 (래스터 이미지용)
+async function getImageRects(page) {
+  const OPS = pdfjsLib.OPS;
+  let opList;
+  try { opList = await page.getOperatorList(); } catch { return []; }
+
+  const IMAGE_OPS = new Set(
+    [OPS.paintImageXObject, OPS.paintInlineImageXObject,
+     OPS.paintImageMaskXObject, OPS.paintJpegXObject,
+     OPS.paintImageXObjectRepeat].filter(Boolean));
+
+  const regions = [];
+  let ctm = [1,0,0,1,0,0];
+  const stack = [];
+  const mul = (m,[a,b,c,d,e,f]) => [
+    m[0]*a+m[2]*b, m[1]*a+m[3]*b,
+    m[0]*c+m[2]*d, m[1]*c+m[3]*d,
+    m[0]*e+m[2]*f+m[4], m[1]*e+m[3]*f+m[5],
+  ];
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i], args = opList.argsArray[i];
+    if      (fn === OPS.save)      stack.push([...ctm]);
+    else if (fn === OPS.restore)   { if (stack.length) ctm = stack.pop(); }
+    else if (fn === OPS.transform) ctm = mul(ctm, args);
+    else if (IMAGE_OPS.has(fn)) {
+      const pts = [[0,0],[1,0],[0,1],[1,1]].map(([x,y]) =>
+        [ctm[0]*x+ctm[2]*y+ctm[4], ctm[1]*x+ctm[3]*y+ctm[5]]);
+      const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+      const r = { xMin:Math.min(...xs), xMax:Math.max(...xs),
+                  yMin:Math.min(...ys), yMax:Math.max(...ys) };
+      if (r.xMax-r.xMin > 20 && r.yMax-r.yMin > 20) regions.push(r);
+    }
+  }
+
+  if (!regions.length) return [];
+  regions.sort((a,b) => a.yMin - b.yMin);
+  const merged = [];
+  for (const r of regions) {
+    const last = merged[merged.length-1];
+    if (last && r.yMin < last.yMax + 12) {
+      last.xMin=Math.min(last.xMin,r.xMin); last.xMax=Math.max(last.xMax,r.xMax);
+      last.yMin=Math.min(last.yMin,r.yMin); last.yMax=Math.max(last.yMax,r.yMax);
+    } else merged.push({...r});
+  }
+  return merged;
+}
+
+// 방법 2: 본문 텍스트 사이 큰 공백 감지 (벡터 그래픽/표 용 fallback)
+// 축 레이블 같은 작은 텍스트(h < 0.65 * bodySize)는 무시
 function findFigureGaps(lines, pageH, bodySize) {
-  if (lines.length < 2) return [];
-  const MIN_GAP = bodySize * 2.8;
-  const MARGIN  = bodySize * 2;
-  const sorted  = [...lines].sort((a, b) => b.y - a.y); // 위→아래 (y 감소)
+  const bodyLines = lines.filter(l => l.h >= bodySize * 0.65);
+  if (bodyLines.length < 2) return [];
+  const MIN_GAP = bodySize * 2.0; // 낮춘 임계값
+  const MARGIN  = bodySize * 1.5;
+  const sorted  = [...bodyLines].sort((a, b) => b.y - a.y);
   const gaps    = [];
   for (let i = 0; i < sorted.length - 1; i++) {
     const above = sorted[i], below = sorted[i + 1];
-    const yTop    = above.y;           // gap 위 텍스트 baseline (PDF 좌표)
-    const yBottom = below.y + below.h; // gap 아래 텍스트 top
+    const yTop    = above.y;
+    const yBottom = below.y + below.h;
     const gap = yTop - yBottom;
     if (gap > MIN_GAP && yBottom > MARGIN && yTop < pageH - MARGIN)
-      gaps.push({ yTop, yBottom, afterIdx: i });
+      gaps.push({ yTop, yBottom });
   }
   return gaps;
 }
@@ -222,40 +273,62 @@ async function extractBlocks(pdf, onProgress) {
   const bodySize = Number(Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0]) || 10;
 
   for (let p = 1; p <= pdf.numPages; p++) {
-    const page    = await pdf.getPage(p);
-    const content = await page.getTextContent();
+    const page = await pdf.getPage(p);
     const { width: pageW, height: pageH } = page.getViewport({ scale: 1 });
+
+    // 텍스트 + 이미지 rect 병렬 취득
+    const [content, imageRects] = await Promise.all([
+      page.getTextContent(),
+      getImageRects(page),
+    ]);
     let lines = groupIntoLines(content.items);
     lines = reorderColumns(lines, pageW);
 
-    // 텍스트가 없는 페이지 → 전체를 그림으로
+    // 텍스트 없는 페이지 → 전체 그림
     if (lines.length === 0) {
       const { cv } = await renderPageCanvas(page, 1.5);
-      const blob = await new Promise(r =>
-        cv.toBlob(r, 'image/jpeg', 0.80));
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.80));
       if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
       onProgress(p, pdf.numPages); continue;
     }
 
-    const gaps = findFigureGaps(lines, pageH, bodySize);
-    if (!gaps.length) {
+    // 래스터 이미지 없으면 갭 감지로 벡터 그래픽 탐지
+    const rects = imageRects.length
+      ? imageRects
+      : findFigureGaps(lines, pageH, bodySize).map(g =>
+          ({ xMin: 0, xMax: pageW, yMin: g.yBottom, yMax: g.yTop }));
+
+    if (!rects.length) {
       linesToBlocks(lines, bodySize, blocks);
-    } else {
-      const SCALE  = 1.5;
-      const { cv } = await renderPageCanvas(page, SCALE);
-      const sorted = [...lines].sort((a, b) => b.y - a.y); // 위→아래
-      let ptr = 0;
-      for (let g = 0; g <= gaps.length; g++) {
-        const boundary = g < gaps.length ? gaps[g].yBottom : -Infinity;
-        const seg = [];
-        while (ptr < sorted.length && sorted[ptr].y >= boundary) seg.push(sorted[ptr++]);
-        linesToBlocks(seg, bodySize, blocks);
-        if (g < gaps.length) {
-          const blob = await cropCanvasRegion(cv, gaps[g].yTop, gaps[g].yBottom, pageH, SCALE);
-          if (blob) blocks.push({ type: 'fig', blob });
-        }
-      }
+      onProgress(p, pdf.numPages); continue;
     }
+
+    const SCALE = 1.5;
+    const { cv } = await renderPageCanvas(page, SCALE);
+
+    // 이미지 rect와 텍스트 라인을 위→아래 순으로 인터리브
+    const sortedImgs  = [...rects].sort((a,b) => b.yMax - a.yMax);
+    const sortedLines = [...lines].sort((a,b) => b.y - a.y);
+    let ptr = 0;
+
+    for (const img of sortedImgs) {
+      // 이 이미지 위의 텍스트 라인
+      const seg = [];
+      while (ptr < sortedLines.length && sortedLines[ptr].y > img.yMax + bodySize * 0.3)
+        seg.push(sortedLines[ptr++]);
+      linesToBlocks(seg, bodySize, blocks);
+
+      // 그림 영역 캡처
+      const blob = await cropCanvasRegion(cv, img.yMax, img.yMin, pageH, SCALE);
+      if (blob) blocks.push({ type: 'fig', blob });
+
+      // 이미지 내부 텍스트 항목(축 레이블 등) 건너뜀
+      while (ptr < sortedLines.length && sortedLines[ptr].y >= img.yMin - bodySize * 0.5)
+        ptr++;
+    }
+    // 이미지 아래 남은 텍스트
+    linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
+
     onProgress(p, pdf.numPages);
   }
   return blocks.filter(b => b.type === 'fig' || b.text?.trim());
