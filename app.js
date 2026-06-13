@@ -168,6 +168,49 @@ function linesToBlocks(lines, bodySize, blocks) {
   flush();
 }
 
+/* ── 그림/표 영역 감지 ─────────────────────────── */
+
+function findFigureGaps(lines, pageH, bodySize) {
+  if (lines.length < 2) return [];
+  const MIN_GAP = bodySize * 2.8;
+  const MARGIN  = bodySize * 2;
+  const sorted  = [...lines].sort((a, b) => b.y - a.y); // 위→아래 (y 감소)
+  const gaps    = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const above = sorted[i], below = sorted[i + 1];
+    const yTop    = above.y;           // gap 위 텍스트 baseline (PDF 좌표)
+    const yBottom = below.y + below.h; // gap 아래 텍스트 top
+    const gap = yTop - yBottom;
+    if (gap > MIN_GAP && yBottom > MARGIN && yTop < pageH - MARGIN)
+      gaps.push({ yTop, yBottom, afterIdx: i });
+  }
+  return gaps;
+}
+
+function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pageH, scale) {
+  const pad = Math.round(3 * scale);
+  const cy  = Math.max(0, Math.floor((pageH - pdfYTop) * scale) - pad);
+  const ch  = Math.min(canvas.height - cy,
+               Math.ceil((pdfYTop - pdfYBottom) * scale) + pad * 2);
+  if (ch < 16) return Promise.resolve(null);
+  return new Promise(res => {
+    const tmp = document.createElement('canvas');
+    tmp.width = canvas.width; tmp.height = ch;
+    tmp.getContext('2d').drawImage(canvas, 0, cy, canvas.width, ch, 0, 0, canvas.width, ch);
+    tmp.toBlob(b => res(b && b.size > 1500 ? b : null), 'image/jpeg', 0.85);
+  });
+}
+
+async function renderPageCanvas(page, scale = 1.5) {
+  const vp = page.getViewport({ scale });
+  const cv = document.createElement('canvas');
+  cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  return { cv, vp };
+}
+
+/* ── extractBlocks ─────────────────────────────── */
+
 async function extractBlocks(pdf, onProgress) {
   const blocks = [], sizes = [];
   for (let p = 1; p <= Math.min(3, pdf.numPages); p++) {
@@ -181,13 +224,41 @@ async function extractBlocks(pdf, onProgress) {
   for (let p = 1; p <= pdf.numPages; p++) {
     const page    = await pdf.getPage(p);
     const content = await page.getTextContent();
-    const { width } = page.getViewport({ scale: 1 });
+    const { width: pageW, height: pageH } = page.getViewport({ scale: 1 });
     let lines = groupIntoLines(content.items);
-    lines = reorderColumns(lines, width);
-    linesToBlocks(lines, bodySize, blocks);
+    lines = reorderColumns(lines, pageW);
+
+    // 텍스트가 없는 페이지 → 전체를 그림으로
+    if (lines.length === 0) {
+      const { cv } = await renderPageCanvas(page, 1.5);
+      const blob = await new Promise(r =>
+        cv.toBlob(r, 'image/jpeg', 0.80));
+      if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
+      onProgress(p, pdf.numPages); continue;
+    }
+
+    const gaps = findFigureGaps(lines, pageH, bodySize);
+    if (!gaps.length) {
+      linesToBlocks(lines, bodySize, blocks);
+    } else {
+      const SCALE  = 1.5;
+      const { cv } = await renderPageCanvas(page, SCALE);
+      const sorted = [...lines].sort((a, b) => b.y - a.y); // 위→아래
+      let ptr = 0;
+      for (let g = 0; g <= gaps.length; g++) {
+        const boundary = g < gaps.length ? gaps[g].yBottom : -Infinity;
+        const seg = [];
+        while (ptr < sorted.length && sorted[ptr].y >= boundary) seg.push(sorted[ptr++]);
+        linesToBlocks(seg, bodySize, blocks);
+        if (g < gaps.length) {
+          const blob = await cropCanvasRegion(cv, gaps[g].yTop, gaps[g].yBottom, pageH, SCALE);
+          if (blob) blocks.push({ type: 'fig', blob });
+        }
+      }
+    }
     onProgress(p, pdf.numPages);
   }
-  return blocks.filter(b => b.text.trim());
+  return blocks.filter(b => b.type === 'fig' || b.text?.trim());
 }
 
 /* ===================== 테마 ===================== */
@@ -393,13 +464,24 @@ function blockHtml(idx, text, highlights) {
 
 function renderReaderContent() {
   const el = $('readerContent');
+  el.querySelectorAll('img[data-fig]').forEach(img => URL.revokeObjectURL(img.src));
   el.innerHTML = '';
   const frag = document.createDocumentFragment();
   currentBook.blocks.forEach((b, i) => {
-    const node = document.createElement(b.type === 'p' ? 'p' : b.type);
+    let node;
+    if (b.type === 'fig') {
+      node = document.createElement('div');
+      node.className = 'blk fig-block';
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(b.blob);
+      img.alt = 'Figure'; img.loading = 'lazy'; img.dataset.fig = '1';
+      node.appendChild(img);
+    } else {
+      node = document.createElement(b.type === 'p' ? 'p' : b.type);
+      node.className = 'blk';
+      node.innerHTML = blockHtml(i, b.text, currentBook.highlights);
+    }
     node.dataset.idx = i;
-    node.className   = 'blk';
-    node.innerHTML   = blockHtml(i, b.text, currentBook.highlights);
     frag.appendChild(node);
   });
   el.appendChild(frag);
@@ -437,6 +519,7 @@ function closeBook() {
   clearTimeout(uiTimer);
   ttsStop();
   saveProgressNow();
+  $('readerContent').querySelectorAll('img[data-fig]').forEach(img => URL.revokeObjectURL(img.src));
   currentBook = null;
   $('readerView').hidden  = true;
   $('hlPanel').hidden     = true;
@@ -702,6 +785,8 @@ function ttsPlayBlock(idx) {
   if (!('speechSynthesis' in window)) { alert('이 브라우저는 읽어주기를 지원하지 않아요.'); return; }
   window.speechSynthesis.cancel();
   if (!currentBook || idx >= currentBook.blocks.length) { ttsStop(); return; }
+  // 그림 블록은 건너뜀
+  if (currentBook.blocks[idx].type === 'fig') { ttsPlayBlock(idx + 1); return; }
 
   tts.active = true; tts.paused = false; tts.blockIdx = idx;
 
@@ -758,7 +843,8 @@ function updateTtsUI() {
   bar.hidden = false;
   bar.classList.toggle('paused', tts.paused);
   const block = currentBook?.blocks[tts.blockIdx];
-  $('ttsText').textContent = block ? block.text.slice(0, 65) + (block.text.length > 65 ? '…' : '') : '';
+  const blockTxt = block?.text || '';
+  $('ttsText').textContent = blockTxt.length > 65 ? blockTxt.slice(0, 65) + '…' : blockTxt;
   $('ttsPlayIcon').hidden  = !tts.paused;
   $('ttsPauseIcon').hidden = tts.paused;
   $('ttsRateBtn').textContent = TTS_RATES[ttsRateIdx].toFixed(1) + '×';
