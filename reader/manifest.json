@@ -1,0 +1,18 @@
+{
+  "name": "Paper Shelf — 논문 이북 리더",
+  "short_name": "Paper Shelf",
+  "description": "논문 PDF를 전자책처럼 읽는 리더",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#f7f4ee",
+  "theme_color": "#1f2430",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
