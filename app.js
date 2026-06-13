@@ -7,47 +7,87 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const DB_NAME = 'paperShelf';
 const STORE   = 'books';
 
+// iOS Safari는 매번 openDB()를 새로 열면 "connection lost" 에러가 발생함
+// 싱글턴으로 관리하고 연결이 끊기면 재연결
+let _dbPromise = null;
+
 function openDB() {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
-    req.onsuccess = () => res(req.result);
-    req.onerror  = () => rej(req.error);
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((res, rej) => {
+    try {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = e => {
+        e.target.result.createObjectStore(STORE, { keyPath: 'id' });
+      };
+      req.onsuccess = e => {
+        const db = e.target.result;
+        db.onclose = () => { _dbPromise = null; }; // 연결 끊기면 재연결 허용
+        db.onversionchange = () => { db.close(); _dbPromise = null; };
+        res(db);
+      };
+      req.onerror = e => {
+        _dbPromise = null;
+        rej(e.target.error);
+      };
+      req.onblocked = () => {
+        _dbPromise = null;
+        rej(new Error('DB blocked'));
+      };
+    } catch (e) {
+      _dbPromise = null;
+      rej(e);
+    }
   });
+  return _dbPromise;
 }
+
+// iOS Safari IDB 작업 실패 시 한 번 재시도
+async function withDB(fn) {
+  try {
+    const db = await openDB();
+    return await fn(db);
+  } catch (err) {
+    // 연결 끊김 에러면 캐시 초기화 후 재시도
+    if (/connection|lost|closed/i.test(err.message || '')) {
+      _dbPromise = null;
+      const db = await openDB();
+      return await fn(db);
+    }
+    throw err;
+  }
+}
+
 async function dbPut(book) {
-  const db = await openDB();
-  return new Promise((res, rej) => {
+  return withDB(db => new Promise((res, rej) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(book);
     tx.oncomplete = res;
     tx.onerror = () => rej(tx.error);
-  });
+    tx.onabort  = () => rej(tx.error);
+  }));
 }
 async function dbGetAll() {
-  const db = await openDB();
-  return new Promise((res, rej) => {
-    const req = db.transaction(STORE).objectStore(STORE).getAll();
+  return withDB(db => new Promise((res, rej) => {
+    const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
     req.onsuccess = () => res(req.result);
     req.onerror  = () => rej(req.error);
-  });
+  }));
 }
 async function dbGet(id) {
-  const db = await openDB();
-  return new Promise((res, rej) => {
-    const req = db.transaction(STORE).objectStore(STORE).get(id);
+  return withDB(db => new Promise((res, rej) => {
+    const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(id);
     req.onsuccess = () => res(req.result);
     req.onerror  = () => rej(req.error);
-  });
+  }));
 }
 async function dbDelete(id) {
-  const db = await openDB();
-  return new Promise((res, rej) => {
+  return withDB(db => new Promise((res, rej) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(id);
     tx.oncomplete = res;
     tx.onerror = () => rej(tx.error);
-  });
+    tx.onabort  = () => rej(tx.error);
+  }));
 }
 
 /* ===================== PDF 추출 ===================== */
@@ -319,7 +359,12 @@ async function addPdf(file) {
     renderLibrary();
   } catch (err) {
     console.error(err);
-    alert('PDF를 처리하지 못했어요: ' + err.message);
+    const msg = err.message || '';
+    if (/connection|lost|quota|storage|blocked/i.test(msg)) {
+      alert('저장 공간 오류가 발생했어요.\n\n해결 방법:\n1. Safari 설정 > 개인 정보 보호 > "모든 쿠키 차단" 꺼주기\n2. 일반 탭(비공개 탭 아님)에서 열기\n3. 기기 저장 공간 확인 후 재시도');
+    } else {
+      alert('PDF를 처리하지 못했어요.\n' + msg);
+    }
   } finally {
     $('extractOverlay').hidden = true;
   }
@@ -854,3 +899,11 @@ renderLibrary();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+// iOS Safari에서 IndexedDB 데이터가 임의로 지워지지 않도록 영구 저장 요청
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist();
+}
+
+// DB를 미리 열어 첫 PDF 추가 시 연결 지연 방지
+openDB().catch(() => {});
