@@ -201,7 +201,8 @@ async function getImageRects(page) {
       const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
       const r = { xMin:Math.min(...xs), xMax:Math.max(...xs),
                   yMin:Math.min(...ys), yMax:Math.max(...ys) };
-      if (r.xMax-r.xMin > 20 && r.yMax-r.yMin > 20) regions.push(r);
+      // 너무 얇은 선/배경 이미지 제거 (최소 40×40 PDF 단위)
+      if (r.xMax-r.xMin > 40 && r.yMax-r.yMin > 40) regions.push(r);
     }
   }
 
@@ -223,8 +224,9 @@ async function getImageRects(page) {
 function findFigureGaps(lines, pageH, bodySize) {
   const bodyLines = lines.filter(l => l.h >= bodySize * 0.65);
   if (bodyLines.length < 2) return [];
-  const MIN_GAP = bodySize * 2.0; // 낮춘 임계값
-  const MARGIN  = bodySize * 1.5;
+  // 최소 5× bodySize AND 최소 55 PDF 단위 이상이어야 진짜 그림으로 판단
+  const MIN_GAP = Math.max(bodySize * 5.0, 55);
+  const MARGIN  = bodySize * 2;
   const sorted  = [...bodyLines].sort((a, b) => b.y - a.y);
   const gaps    = [];
   for (let i = 0; i < sorted.length - 1; i++) {
@@ -239,11 +241,11 @@ function findFigureGaps(lines, pageH, bodySize) {
 }
 
 function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pageH, scale) {
-  const pad = Math.round(3 * scale);
+  const pad = Math.round(18 * scale); // 넉넉한 패딩으로 테두리 잘림 방지
   const cy  = Math.max(0, Math.floor((pageH - pdfYTop) * scale) - pad);
   const ch  = Math.min(canvas.height - cy,
                Math.ceil((pdfYTop - pdfYBottom) * scale) + pad * 2);
-  if (ch < 16) return Promise.resolve(null);
+  if (ch < 30) return Promise.resolve(null);
   return new Promise(res => {
     const tmp = document.createElement('canvas');
     tmp.width = canvas.width; tmp.height = ch;
@@ -547,7 +549,7 @@ function renderReaderContent() {
       node.className = 'blk fig-block';
       const img = document.createElement('img');
       img.src = URL.createObjectURL(b.blob);
-      img.alt = 'Figure'; img.loading = 'lazy'; img.dataset.fig = '1';
+      img.alt = 'Figure'; img.dataset.fig = '1';
       node.appendChild(img);
     } else {
       node = document.createElement(b.type === 'p' ? 'p' : b.type);
