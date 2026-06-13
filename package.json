@@ -1,0 +1,27 @@
+{
+  "name": "paper-shelf",
+  "version": "1.0.0",
+  "description": "논문 PDF를 전자책처럼 읽는 리더",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve . -p 8901",
+    "cap:sync": "npx cap sync",
+    "cap:open:ios": "npx cap open ios",
+    "cap:open:android": "npx cap open android",
+    "cap:build:android": "npx cap build android"
+  },
+  "keywords": ["ebook", "pdf", "reader", "capacitor"],
+  "author": "Paper Shelf",
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/preferences": "^6.0.0",
+    "@capacitor/status-bar": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/assets": "^3.0.0"
+  }
+}

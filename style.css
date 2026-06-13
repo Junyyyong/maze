@@ -289,9 +289,8 @@ body.tts-on .reader-content {
 
 .reader-content p {
   margin: 0 0 1.05em;
-  text-align: justify;
+  text-align: left;
   word-break: break-word;
-  hyphens: auto;
 }
 .reader-content h2 {
   font-size: 1.28em;
@@ -866,4 +865,54 @@ mark.hl.has-note { border-bottom: 2.5px solid var(--hl-border); }
   .lib-header { padding: 16px 16px 10px; }
   .book-grid { padding: 0 12px 60px; gap: 20px 12px; }
   .above-tb-panel { width: calc(100vw - 32px); left: 16px; transform: none; }
+}
+
+/* ── e-ink 최적화 (Onyx Boox 등) ──────────────── */
+
+[data-eink] * {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+}
+[data-eink] {
+  --bg:        #FFFFFF;
+  --reader-bg: #FFFFFF;
+  --fg:        #000000;
+  --fg2:       #111111;
+  --muted:     #444444;
+  --accent:    #000000;
+  --border:    #888888;
+  --ui-bg:     #FFFFFF;
+  --hl-bg:     #C8C8C8;
+  --hl-solid:  #888888;
+  --shadow:    none;
+  --shadow-lg: none;
+}
+[data-eink] .reader-topbar,
+[data-eink] .reader-toolbar {
+  border: 1.5px solid #000;
+  box-shadow: none;
+  background: #FFFFFF;
+}
+[data-eink] .tb-btn,
+[data-eink] .tb-icon-btn,
+[data-eink] .icon-btn {
+  min-width: 52px;
+  min-height: 52px;
+}
+[data-eink] .book-card {
+  border: 2px solid #000;
+  box-shadow: none;
+}
+[data-eink] .book-cover::after { display: none; }
+[data-eink] .reader-content {
+  font-size: 20px !important;
+  line-height: 1.9 !important;
+}
+[data-eink] .reader-progress-fill {
+  background: #000;
+}
+[data-eink] mark.hl {
+  background: #C8C8C8;
+  border-bottom: 2px solid #000;
 }

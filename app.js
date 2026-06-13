@@ -814,11 +814,39 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && tts.active && !tts.paused) window.speechSynthesis.resume();
 });
 
+/* ===================== e-ink 모드 ===================== */
+
+function applyEink(on) {
+  if (on) {
+    document.documentElement.dataset.eink = '';
+    document.documentElement.dataset.theme = 'light';
+    localStorage.setItem('einkMode', '1');
+  } else {
+    delete document.documentElement.dataset.eink;
+    localStorage.removeItem('einkMode');
+    applyTheme(localStorage.getItem('readerTheme') || 'sepia');
+  }
+}
+
+// e-ink 버튼 토글
+const einkBtnEl = document.getElementById('einkBtn');
+if (einkBtnEl) {
+  einkBtnEl.onclick = () => applyEink(!document.documentElement.hasAttribute('data-eink'));
+}
+
+// Onyx Boox / e-ink 기기 자동 감지 (userAgent or low-color-gamut)
+const isEink = /onyx|boox|kindle|kobo|remarkable|pocketbook/i.test(navigator.userAgent)
+  || window.matchMedia?.('(color-gamut: srgb)').matches === false;
+
+if (localStorage.getItem('einkMode') === '1' || isEink) {
+  applyEink(true);
+}
+
 /* ===================== 초기화 ===================== */
 
 // 테마
 const savedTheme = localStorage.getItem('readerTheme') || 'sepia';
-applyTheme(savedTheme);
+if (!localStorage.getItem('einkMode')) applyTheme(savedTheme);
 
 applyFontSize();
 renderLibrary();
