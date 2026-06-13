@@ -240,17 +240,19 @@ function findFigureGaps(lines, pageH, bodySize) {
   return gaps;
 }
 
-function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pageH, scale) {
-  const pad = Math.round(18 * scale); // 넉넉한 패딩으로 테두리 잘림 방지
-  const cy  = Math.max(0, Math.floor((pageH - pdfYTop) * scale) - pad);
-  const ch  = Math.min(canvas.height - cy,
-               Math.ceil((pdfYTop - pdfYBottom) * scale) + pad * 2);
-  if (ch < 30) return Promise.resolve(null);
+function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pdfXMin, pdfXMax, pageH, scale) {
+  const padX = Math.round(10 * scale);
+  const padY = Math.round(12 * scale);
+  const cx = Math.max(0, Math.floor(pdfXMin * scale) - padX);
+  const cw = Math.min(canvas.width - cx, Math.ceil((pdfXMax - pdfXMin) * scale) + padX * 2);
+  const cy = Math.max(0, Math.floor((pageH - pdfYTop) * scale) - padY);
+  const ch = Math.min(canvas.height - cy, Math.ceil((pdfYTop - pdfYBottom) * scale) + padY * 2);
+  if (ch < 30 || cw < 30) return Promise.resolve(null);
   return new Promise(res => {
     const tmp = document.createElement('canvas');
-    tmp.width = canvas.width; tmp.height = ch;
-    tmp.getContext('2d').drawImage(canvas, 0, cy, canvas.width, ch, 0, 0, canvas.width, ch);
-    tmp.toBlob(b => res(b && b.size > 1500 ? b : null), 'image/jpeg', 0.85);
+    tmp.width = cw; tmp.height = ch;
+    tmp.getContext('2d').drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
+    tmp.toBlob(b => res(b && b.size > 1500 ? b : null), 'image/jpeg', 0.88);
   });
 }
 
@@ -320,8 +322,8 @@ async function extractBlocks(pdf, onProgress) {
         seg.push(sortedLines[ptr++]);
       linesToBlocks(seg, bodySize, blocks);
 
-      // 그림 영역 캡처
-      const blob = await cropCanvasRegion(cv, img.yMax, img.yMin, pageH, SCALE);
+      // 그림 영역 캡처 (xMin/xMax로 좌우 여백 제거)
+      const blob = await cropCanvasRegion(cv, img.yMax, img.yMin, img.xMin, img.xMax, pageH, SCALE);
       if (blob) blocks.push({ type: 'fig', blob });
 
       // 이미지 내부 텍스트 항목(축 레이블 등) 건너뜀
@@ -537,6 +539,17 @@ function blockHtml(idx, text, highlights) {
   return html + escapeHtml(text.slice(pos));
 }
 
+/* ===================== 그림 확대 모달 ===================== */
+
+function figZoomOpen(src) {
+  $('figZoomImg').src = src;
+  $('figZoomModal').hidden = false;
+}
+function figZoomClose() {
+  $('figZoomModal').hidden = true;
+  $('figZoomImg').src = '';
+}
+
 function renderReaderContent() {
   const el = $('readerContent');
   el.querySelectorAll('img[data-fig]').forEach(img => URL.revokeObjectURL(img.src));
@@ -550,6 +563,7 @@ function renderReaderContent() {
       const img = document.createElement('img');
       img.src = URL.createObjectURL(b.blob);
       img.alt = 'Figure'; img.dataset.fig = '1';
+      img.addEventListener('click', e => { e.stopPropagation(); figZoomOpen(img.src); });
       node.appendChild(img);
     } else {
       node = document.createElement(b.type === 'p' ? 'p' : b.type);
@@ -986,6 +1000,12 @@ $('ttsNextBtn').onclick  = ttsNext;
 $('ttsPrevBtn').onclick  = ttsPrev;
 $('ttsStopBtn').onclick  = ttsStop;
 $('ttsRateBtn').onclick  = ttsCycleRate;
+
+// 그림 확대 모달 닫기 (이미지 바깥 탭)
+$('figZoomModal').addEventListener('click', e => {
+  if (!e.target.closest('#figZoomImg')) figZoomClose();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') figZoomClose(); });
 
 // 본문 탭 → UI 토글 / 하이라이트 클릭
 $('readerContent').addEventListener('click', e => {
