@@ -227,42 +227,41 @@ const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그�
 function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
   const captions = lines.filter(l => CAPTION_RE.test(l.text));
   const body     = lines.filter(l => l.h >= bodySize * 0.65 && !CAPTION_RE.test(l.text));
+  // 본문 컬럼 x 범위 (표 테두리까지 포함하는 넉넉한 너비)
+  const colX0 = body.length ? Math.min(...body.map(b => b.x0)) : 0;
+  const colX1 = body.length ? Math.max(...body.map(b => b.x1)) : pageW;
+
   const regions  = [];
   const usedCaps = [];
 
   for (const cap of captions) {
     const capMid = cap.y + cap.h / 2;
 
-    // ── 1순위: 캡션 근처 래스터 이미지 rect ──────────────
+    // ── 1순위: 래스터 이미지 rect ──────────────────────────
     const near = rasterRects.filter(r =>
       Math.abs((r.yMin + r.yMax) / 2 - capMid) < pageH * 0.55);
 
     if (near.length) {
-      let xMin = Math.min(...near.map(r => r.xMin));
-      let xMax = Math.max(...near.map(r => r.xMax));
-      let yLo  = Math.min(...near.map(r => r.yMin));
-      let yHi  = Math.max(...near.map(r => r.yMax));
+      let yLo = Math.min(...near.map(r => r.yMin));
+      let yHi = Math.max(...near.map(r => r.yMax));
 
-      // 래스터 이미지 rect는 표 셀의 이미지만 감지하고 텍스트 헤더/레이블은 놓침.
-      // x 범위가 겹치는 텍스트 라인을 bodySize*5 이내에서 흡수해 표 전체를 포함.
-      const NEAR_Y = bodySize * 5;
-      let changed = true;
-      while (changed) {
-        changed = false;
+      // 표 헤더/레이블 포함: 래스터 경계에 직접 붙어있는 텍스트만 흡수 (최대 3 pass)
+      // NEAR_Y = bodySize(1줄 간격) — 이보다 멀면 본문으로 판단해 포함 안 함
+      const NEAR_Y = bodySize;
+      for (let pass = 0; pass < 3; pass++) {
         for (const l of lines) {
           if (CAPTION_RE.test(l.text)) continue;
-          if (l.x1 < xMin - 12 || l.x0 > xMax + 12) continue; // x 겹침 없음
           const lTop = l.y + l.h, lBot = l.y;
-          if (lTop > yHi && lBot < yHi + NEAR_Y) { yHi = lTop; changed = true; }
-          if (lBot < yLo && lTop > yLo - NEAR_Y)  { yLo = lBot; changed = true; }
+          if (lTop > yHi && lBot - yHi <= NEAR_Y) yHi = lTop; // 바로 위 텍스트
+          if (lBot < yLo && yLo - lTop <= NEAR_Y) yLo = lBot; // 바로 아래 텍스트
         }
       }
 
       regions.push({
-        yLo: Math.max(0, yLo - bodySize * 0.4),
-        yHi: Math.min(pageH, yHi + bodySize * 0.4),
-        x0: Math.max(0, xMin - 8),
-        x1: Math.min(pageW, xMax + 8),
+        yLo: Math.max(0, yLo - bodySize * 0.3),
+        yHi: Math.min(pageH, yHi + bodySize * 0.3),
+        x0: colX0,
+        x1: colX1,
         caption: cap.text,
       });
       usedCaps.push(cap);
@@ -272,7 +271,6 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
     // ── 2순위: 캡션 위/아래 텍스트 갭 (벡터/표) ──────────
     const capTop = cap.y + cap.h;
     const capBot = cap.y;
-    // 캡션과 가까운 텍스트는 그림 내부일 수 있으니 bodySize*1.5 여유 두고 탐색
     let aboveBase = pageH;
     for (const b of body)
       if (b.y > capTop + bodySize * 1.5 && b.y < aboveBase) aboveBase = b.y;
@@ -290,11 +288,11 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
       yHi = capBot; yLo = belowTop;
     } else continue;
 
-    regions.push({ yLo, yHi, x0: 0, x1: pageW, caption: cap.text });
+    regions.push({ yLo, yHi, x0: colX0, x1: colX1, caption: cap.text });
     usedCaps.push(cap);
   }
 
-  // ── 캡션 없는 래스터 이미지 (사진 등) ──────────────────
+  // ── 캡션 없는 래스터 이미지 ──────────────────────────────
   for (const r of rasterRects) {
     if (regions.some(g => r.yMin < g.yHi + bodySize && r.yMax > g.yLo - bodySize)) continue;
     regions.push({ yLo: r.yMin, yHi: r.yMax, x0: r.xMin, x1: r.xMax, caption: '' });
@@ -302,7 +300,6 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
 
   if (!regions.length) return { regions: [], usedCaps };
 
-  // 위→아래 정렬 후 겹치는 영역 병합
   regions.sort((a, b) => b.yHi - a.yHi);
   const merged = [];
   for (const g of regions) {
