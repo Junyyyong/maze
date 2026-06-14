@@ -174,25 +174,27 @@ function linesToBlocks(lines, bodySize, blocks) {
 
 /* ── 그림 영역 감지 ─────────────────────────────── */
 
-// PDF에 박힌 비트맵을 직접 추출 → bbox + blob 반환 (좌표 계산/크롭 불필요)
-async function getEmbeddedImages(page) {
+// 페이지의 그래픽 요소(임베드 이미지 + 벡터 경로)의 bbox를 PDF 좌표계로 수집
+async function collectGraphics(page) {
   const OPS = pdfjsLib.OPS;
   let opList;
-  try { opList = await page.getOperatorList(); } catch { return []; }
+  try { opList = await page.getOperatorList(); } catch { return { imageBoxes: [], vectorBoxes: [] }; }
 
   const IMAGE_OPS = new Set(
     [OPS.paintImageXObject, OPS.paintInlineImageXObject,
      OPS.paintImageMaskXObject, OPS.paintJpegXObject,
      OPS.paintImageXObjectRepeat].filter(Boolean));
+  const PATH_OPS = new Set(
+    [OPS.constructPath, OPS.stroke, OPS.fill, OPS.eoFill, OPS.fillStroke].filter(Boolean));
 
   const mul = (m, [a,b,c,d,e,f]) => [
     m[0]*a+m[2]*b, m[1]*a+m[3]*b,
     m[0]*c+m[2]*d, m[1]*c+m[3]*d,
     m[0]*e+m[2]*f+m[4], m[1]*e+m[3]*f+m[5],
   ];
+  const xform = (ctm, x, y) => [ctm[0]*x+ctm[2]*y+ctm[4], ctm[1]*x+ctm[3]*y+ctm[5]];
 
-  // operator list에서 각 이미지의 이름과 PDF 좌표계 bbox 수집
-  const items = [];
+  const imageBoxes = [], vectorBoxes = [];
   let ctm = [1,0,0,1,0,0];
   const stack = [];
   for (let i = 0; i < opList.fnArray.length; i++) {
@@ -201,59 +203,121 @@ async function getEmbeddedImages(page) {
     else if (fn === OPS.restore)   { if (stack.length) ctm = stack.pop(); }
     else if (fn === OPS.transform) ctm = mul(ctm, args);
     else if (IMAGE_OPS.has(fn)) {
-      const pts = [[0,0],[1,0],[0,1],[1,1]].map(([x,y]) =>
-        [ctm[0]*x+ctm[2]*y+ctm[4], ctm[1]*x+ctm[3]*y+ctm[5]]);
+      const pts = [[0,0],[1,0],[0,1],[1,1]].map(([x,y]) => xform(ctm, x, y));
       const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
       const r = { xMin:Math.min(...xs), xMax:Math.max(...xs),
                   yMin:Math.min(...ys), yMax:Math.max(...ys), name: args[0] };
-      if (r.xMax-r.xMin > 40 && r.yMax-r.yMin > 40) items.push(r);
+      if (r.xMax-r.xMin > 40 && r.yMax-r.yMin > 40) imageBoxes.push(r);
+    }
+    else if (fn === OPS.constructPath) {
+      // args[1]: 평탄화된 좌표 배열 (path 공간) → CTM 적용해 bbox 계산
+      const coords = args[1];
+      if (!coords || coords.length < 2) continue;
+      let xmn=Infinity, xmx=-Infinity, ymn=Infinity, ymx=-Infinity;
+      for (let k = 0; k + 1 < coords.length; k += 2) {
+        const [px, py] = xform(ctm, coords[k], coords[k+1]);
+        if (px<xmn) xmn=px; if (px>xmx) xmx=px;
+        if (py<ymn) ymn=py; if (py>ymx) ymx=py;
+      }
+      if (!isFinite(xmn)) continue;
+      const w = xmx-xmn, h = ymx-ymn;
+      // 본문 밑줄/표 괘선(아주 얇고 넓은 선)과 점 크기 잡티는 제외
+      if (w < 8 && h < 8) continue;
+      if (h < 2 || w < 2) continue;
+      vectorBoxes.push({ xMin:xmn, xMax:xmx, yMin:ymn, yMax:ymx });
     }
   }
-  if (!items.length) return [];
+  return { imageBoxes, vectorBoxes };
+}
 
-  // PDF 객체에서 픽셀 데이터 로드 (비동기 콜백 패턴)
-  const getObj = name => new Promise(resolve => {
-    try { page.objs.get(name, o => resolve(o)); }
-    catch { try { page.commonObjs.get(name, o => resolve(o)); } catch { resolve(null); } }
+// 임베드 이미지 한 개의 픽셀을 꺼내 JPEG blob으로 변환 (직접 추출, 최고 화질)
+async function extractImageBlob(page, name) {
+  const getObj = nm => new Promise(resolve => {
+    try { page.objs.get(nm, o => resolve(o)); }
+    catch { try { page.commonObjs.get(nm, o => resolve(o)); } catch { resolve(null); } }
   });
+  const obj = await Promise.race([
+    getObj(name),
+    new Promise(r => setTimeout(() => r(null), 4000)),
+  ]);
+  if (!obj || !obj.data || !obj.width || !obj.height) return null;
+  const { width, height, data } = obj;
+  const ch = data.length / (width * height);
 
-  const results = [];
-  for (const item of items) {
-    const obj = await Promise.race([
-      getObj(item.name),
-      new Promise(r => setTimeout(() => r(null), 4000)),
-    ]);
-    if (!obj || !obj.data || !obj.width || !obj.height) continue;
-    const { width, height, data } = obj;
-    const ch = data.length / (width * height);
+  let rgba;
+  if (ch === 4) {
+    rgba = new Uint8ClampedArray(data.buffer || data);
+  } else if (ch === 3) {
+    rgba = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      rgba[i*4] = data[i*3]; rgba[i*4+1] = data[i*3+1];
+      rgba[i*4+2] = data[i*3+2]; rgba[i*4+3] = 255;
+    }
+  } else if (ch === 1) {
+    rgba = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = data[i]; rgba[i*4+3] = 255;
+    }
+  } else return null;
 
-    // 채널 수에 따라 RGBA로 변환
-    let rgba;
-    if (ch === 4) {
-      rgba = new Uint8ClampedArray(data.buffer || data);
-    } else if (ch === 3) {
-      rgba = new Uint8ClampedArray(width * height * 4);
-      for (let i = 0; i < width * height; i++) {
-        rgba[i*4] = data[i*3]; rgba[i*4+1] = data[i*3+1];
-        rgba[i*4+2] = data[i*3+2]; rgba[i*4+3] = 255;
+  const cv = document.createElement('canvas');
+  cv.width = width; cv.height = height;
+  cv.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
+  return blob && blob.size > 1500 ? blob : null;
+}
+
+// 그래픽 박스들을 근접도로 묶어 그림 영역 클러스터 생성
+// (멀티패널 이미지 병합 + 래스터에 붙은 벡터 흡수, 단 간격보다 작은 임계값이라 옆 단은 안 섞임)
+function clusterFigures(imageBoxes, vectorBoxes, bodySize) {
+  const MERGE = bodySize * 2;     // 이미지끼리 병합 거리
+  const VEC_REACH = bodySize * 1.5; // 이미지에 벡터를 흡수하는 거리
+  const gap = (a, b) => {
+    const gx = Math.max(0, Math.max(a.xMin - b.xMax, b.xMin - a.xMax));
+    const gy = Math.max(0, Math.max(a.yMin - b.yMax, b.yMin - a.yMax));
+    return { gx, gy };
+  };
+  // 이미지 박스를 시드 클러스터로
+  const clusters = imageBoxes.map(b => ({
+    xMin:b.xMin, xMax:b.xMax, yMin:b.yMin, yMax:b.yMax,
+    images: [b], hasVector: false,
+  }));
+  // 근접 이미지 병합 (반복 수렴)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        const { gx, gy } = gap(clusters[i], clusters[j]);
+        if (gx < MERGE && gy < MERGE) {
+          const a = clusters[i], b = clusters[j];
+          a.xMin = Math.min(a.xMin, b.xMin); a.xMax = Math.max(a.xMax, b.xMax);
+          a.yMin = Math.min(a.yMin, b.yMin); a.yMax = Math.max(a.yMax, b.yMax);
+          a.images.push(...b.images);
+          clusters.splice(j, 1); changed = true; j--;
+        }
       }
-    } else if (ch === 1) {
-      rgba = new Uint8ClampedArray(width * height * 4);
-      for (let i = 0; i < width * height; i++) {
-        rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = data[i]; rgba[i*4+3] = 255;
-      }
-    } else continue;
-
-    const cv = document.createElement('canvas');
-    cv.width = width; cv.height = height;
-    cv.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
-    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
-    if (blob && blob.size > 1500) results.push({ ...item, blob });
+    }
   }
-
-  // 페이지 상단(y 큰 쪽)부터 읽기 순서로 정렬
-  results.sort((a, b) => b.yMin - a.yMin);
-  return results;
+  // 각 클러스터에 인접 벡터 흡수 → 축·레이블·범례 포함
+  for (const c of clusters) {
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const v of vectorBoxes) {
+        if (v._used) continue;
+        const { gx, gy } = gap(c, v);
+        if (gx < VEC_REACH && gy < VEC_REACH) {
+          c.xMin = Math.min(c.xMin, v.xMin); c.xMax = Math.max(c.xMax, v.xMax);
+          c.yMin = Math.min(c.yMin, v.yMin); c.yMax = Math.max(c.yMax, v.yMax);
+          c.hasVector = true; v._used = true; grew = true;
+        }
+      }
+    }
+  }
+  clusters.forEach(c => { c.yHi = c.yMax; c.yLo = c.yMin; c.x0 = c.xMin; c.x1 = c.xMax; });
+  clusters.sort((a, b) => b.yHi - a.yHi);
+  return clusters;
 }
 
 const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
@@ -421,10 +485,10 @@ async function extractBlocks(pdf, onProgress) {
     const page = await pdf.getPage(p);
     const { width: pageW, height: pageH } = page.getViewport({ scale: 1 });
 
-    // 텍스트 + 임베드 이미지 병렬 취득
-    const [content, embeds] = await Promise.all([
+    // 텍스트 + 그래픽(이미지·벡터) bbox 병렬 취득
+    const [content, graphics] = await Promise.all([
       page.getTextContent(),
-      getEmbeddedImages(page),
+      collectGraphics(page),
     ]);
     let lines = groupIntoLines(content.items);
     lines = reorderColumns(lines, pageW);
@@ -434,10 +498,31 @@ async function extractBlocks(pdf, onProgress) {
       l.text.length > 80 ||
       CAPTION_RE.test(l.text));
 
-    // 텍스트 없는 페이지 → 전체 그림
+    // 그래픽을 그림 영역으로 클러스터링 (멀티패널 병합 + 래스터+벡터 흡수)
+    const figRegions = graphics.imageBoxes.length
+      ? clusterFigures(graphics.imageBoxes, graphics.vectorBoxes, bodySize)
+      : [];
+
+    const SCALE = 2.5;
+    let pageCanvas = null;
+    const getCanvas = async () => (pageCanvas ??= (await renderPageCanvas(page, SCALE)).cv);
+
+    // 한 그림 영역을 blob으로: 단일·순수 래스터면 직접 추출(최고화질), 아니면 캔버스 크롭
+    const regionToBlob = async (g) => {
+      if (g.images.length === 1 && !g.hasVector) {
+        const blob = await extractImageBlob(page, g.images[0].name);
+        if (blob) return blob;
+      }
+      return cropCanvasRegion(await getCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
+    };
+
+    // 텍스트 없는 페이지 → 그림만
     if (lines.length === 0) {
-      if (embeds.length) {
-        for (const img of embeds) blocks.push({ type: 'fig', blob: img.blob, caption: '' });
+      if (figRegions.length) {
+        for (const g of figRegions) {
+          const blob = await regionToBlob(g);
+          if (blob) blocks.push({ type: 'fig', blob, caption: '' });
+        }
       } else {
         const { cv } = await renderPageCanvas(page, 2.0);
         const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
@@ -446,44 +531,43 @@ async function extractBlocks(pdf, onProgress) {
       onProgress(p, pdf.numPages); continue;
     }
 
-    if (embeds.length) {
-      // ── PDF 직접 추출 경로: 좌표 계산 없이 비트맵 그대로 삽입 ──
+    if (figRegions.length) {
+      // ── 그래픽 영역 기반 경로 ──
       const captions  = lines.filter(l =>  CAPTION_RE.test(l.text));
       const bodyLines = lines.filter(l => !CAPTION_RE.test(l.text)).sort((a, b) => b.y - a.y);
 
-      // 각 이미지에 가장 가까운 캡션 연결 (y 거리 기준)
+      // 각 영역에 가장 가까운 캡션 연결 (y 거리 기준)
       const usedCaps = new Set();
-      for (const img of embeds) {
-        const mid = (img.yMin + img.yMax) / 2;
+      for (const g of figRegions) {
+        const mid = (g.yLo + g.yHi) / 2;
         let best = null, bestD = Infinity;
         for (const c of captions) {
           const d = Math.abs(c.y + c.h / 2 - mid);
           if (d < bestD && d < bodySize * 20 && !usedCaps.has(c)) { bestD = d; best = c; }
         }
-        img.caption = best ? best.text : '';
+        g.caption = best ? best.text : '';
         if (best) usedCaps.add(best);
       }
 
-      // 텍스트와 이미지를 y 순서(위→아래)로 인터리브
+      // 텍스트와 그림을 y 순서(위→아래)로 인터리브
       let ptr = 0;
-      for (const img of embeds) {
-        // 이 이미지 위의 본문 텍스트 출력
+      for (const g of figRegions) {
         const seg = [];
-        while (ptr < bodyLines.length && bodyLines[ptr].y > img.yMax - bodySize * 0.5)
+        while (ptr < bodyLines.length && bodyLines[ptr].y > g.yHi - bodySize * 0.5)
           seg.push(bodyLines[ptr++]);
         linesToBlocks(seg, bodySize, blocks);
 
-        // PDF에서 꺼낸 비트맵을 그대로 삽입
-        blocks.push({ type: 'fig', blob: img.blob, caption: img.caption });
+        const blob = await regionToBlob(g);
+        if (blob) blocks.push({ type: 'fig', blob, caption: g.caption });
 
-        // 이미지 bbox 내 텍스트 레이어(축 레이블 등) 건너뜀
-        while (ptr < bodyLines.length && bodyLines[ptr].y >= img.yMin - bodySize * 0.5)
+        // 그림 영역 내부 텍스트(축 레이블/표 셀) 건너뜀
+        while (ptr < bodyLines.length && bodyLines[ptr].y >= g.yLo - bodySize * 0.5)
           ptr++;
       }
       linesToBlocks(bodyLines.slice(ptr), bodySize, blocks);
 
     } else {
-      // ── 벡터 그림 폴백: 캡션 기반 캔버스 크롭 ──
+      // ── 벡터 전용 그림 폴백: 캡션 기반 캔버스 크롭 ──
       const { regions, usedCaps } = buildFigureRegions(lines, [], pageW, pageH, bodySize);
 
       if (!regions.length) {
@@ -491,8 +575,6 @@ async function extractBlocks(pdf, onProgress) {
         onProgress(p, pdf.numPages); continue;
       }
 
-      const SCALE = 2.0;
-      const { cv } = await renderPageCanvas(page, SCALE);
       const used = new Set(usedCaps);
       const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
       let ptr = 0;
@@ -502,7 +584,7 @@ async function extractBlocks(pdf, onProgress) {
         while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
           seg.push(sortedLines[ptr++]);
         linesToBlocks(seg, bodySize, blocks);
-        const blob = await cropCanvasRegion(cv, g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
+        const blob = await cropCanvasRegion(await getCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
         if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
         while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5)
           ptr++;
