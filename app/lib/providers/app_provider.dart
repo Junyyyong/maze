@@ -16,6 +16,10 @@ const String _kOnboardingDone = 'onboarding_done';
 // ---------------------------------------------------------------------------
 
 class AppProvider extends ChangeNotifier {
+  // Exposed so theme-picker widgets can iterate all themes without importing
+  // app_theme.dart directly.
+  static List<ReaderTheme> get _readerThemes => ReaderTheme.values;
+
   // ── State ─────────────────────────────────────────────────────────────────
 
   ReaderTheme _readerTheme = ReaderTheme.sepia;

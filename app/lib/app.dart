@@ -7,6 +7,7 @@ import 'screens/splash_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/reader_screen.dart';
+import 'screens/settings_screen.dart';
 
 // ---------------------------------------------------------------------------
 // PaperShelfApp
@@ -62,6 +63,11 @@ class _PaperShelfAppState extends State<PaperShelfApp> {
       case '/reader':
         return MaterialPageRoute(
           builder: (_) => const ReaderScreen(),
+          settings: settings,
+        );
+      case '/settings':
+        return MaterialPageRoute(
+          builder: (_) => const SettingsScreen(),
           settings: settings,
         );
       default:
