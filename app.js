@@ -556,19 +556,6 @@ let saveTimer   = null;
 
 /* ===================== 서재 ===================== */
 
-const COVER_GRADIENTS = [
-  ['#4D6FA3','#2E4F82'], ['#7057A8','#4E3580'],
-  ['#3A9890','#236A64'], ['#C0623A','#944018'],
-  ['#4A9A4A','#2E7030'], ['#A04070','#6E244C'],
-  ['#806838','#5A4418'], ['#3868A0','#1E4878'],
-];
-function coverGradient(id) {
-  let h = 0;
-  for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0x7FFFFFFF;
-  const [c1, c2] = COVER_GRADIENTS[h % COVER_GRADIENTS.length];
-  return `linear-gradient(160deg, ${c1}, ${c2})`;
-}
-
 async function renderLibrary() {
   const books = await dbGetAll();
   books.sort((a, b) => (b.lastReadAt || b.addedAt) - (a.lastReadAt || a.addedAt));
@@ -581,10 +568,11 @@ async function renderLibrary() {
     const card = document.createElement('div');
     card.className = 'book-card';
     card.style.position = 'relative';
+    const initial = (b.title || '?').trim().charAt(0).toUpperCase() || '?';
     card.innerHTML = `
       <button class="book-del-btn" aria-label="삭제">✕</button>
-      <div class="book-cover" style="background:${coverGradient(b.id)}">
-        <span class="book-cover-icon">📄</span>
+      <div class="book-cover">
+        <span class="book-cover-letter"></span>
       </div>
       <div class="book-title-wrap">
         <div class="book-title"></div>
@@ -592,6 +580,7 @@ async function renderLibrary() {
       </div>
       <div class="book-meta">${b.numPages}쪽 · ${pct}% 읽음</div>
       <div class="book-progress-bar"><div class="book-progress-fill" style="width:${pct}%"></div></div>`;
+    card.querySelector('.book-cover-letter').textContent = initial;
     card.querySelector('.book-title').textContent = b.title;
     card.querySelector('.book-del-btn').onclick = async e => {
       e.stopPropagation();
