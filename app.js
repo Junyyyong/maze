@@ -586,13 +586,39 @@ async function renderLibrary() {
       <div class="book-cover" style="background:${coverGradient(b.id)}">
         <span class="book-cover-icon">📄</span>
       </div>
-      <div class="book-title"></div>
+      <div class="book-title-wrap">
+        <div class="book-title"></div>
+        <button class="book-rename-btn" aria-label="제목 수정">✎</button>
+      </div>
       <div class="book-meta">${b.numPages}쪽 · ${pct}% 읽음</div>
       <div class="book-progress-bar"><div class="book-progress-fill" style="width:${pct}%"></div></div>`;
     card.querySelector('.book-title').textContent = b.title;
     card.querySelector('.book-del-btn').onclick = async e => {
       e.stopPropagation();
       if (confirm(`"${b.title}"을(를) 삭제할까요?`)) { await dbDelete(b.id); renderLibrary(); }
+    };
+    card.querySelector('.book-rename-btn').onclick = e => {
+      e.stopPropagation();
+      const titleEl = card.querySelector('.book-title');
+      const renBtn  = card.querySelector('.book-rename-btn');
+      const input   = document.createElement('input');
+      input.className = 'book-title-input';
+      input.value     = b.title;
+      titleEl.replaceWith(input);
+      renBtn.style.display = 'none';
+      input.focus(); input.select();
+      const commit = async () => {
+        const v = input.value.trim();
+        if (v && v !== b.title) { b.title = v; await dbPut(b); }
+        renderLibrary();
+      };
+      input.addEventListener('blur',    commit);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { renderLibrary(); }
+        e.stopPropagation();
+      });
+      input.addEventListener('click', e => e.stopPropagation());
     };
     card.onclick = () => openBook(b.id);
     grid.appendChild(card);
