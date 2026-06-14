@@ -174,8 +174,8 @@ function linesToBlocks(lines, bodySize, blocks) {
 
 /* ── 그림 영역 감지 ─────────────────────────────── */
 
-// 방법 1: PDF operator list에서 실제 이미지 드로우 명령 추출 (래스터 이미지용)
-async function getImageRects(page) {
+// PDF에 박힌 비트맵을 직접 추출 → bbox + blob 반환 (좌표 계산/크롭 불필요)
+async function getEmbeddedImages(page) {
   const OPS = pdfjsLib.OPS;
   let opList;
   try { opList = await page.getOperatorList(); } catch { return []; }
@@ -185,15 +185,16 @@ async function getImageRects(page) {
      OPS.paintImageMaskXObject, OPS.paintJpegXObject,
      OPS.paintImageXObjectRepeat].filter(Boolean));
 
-  const regions = [];
-  let ctm = [1,0,0,1,0,0];
-  const stack = [];
-  const mul = (m,[a,b,c,d,e,f]) => [
+  const mul = (m, [a,b,c,d,e,f]) => [
     m[0]*a+m[2]*b, m[1]*a+m[3]*b,
     m[0]*c+m[2]*d, m[1]*c+m[3]*d,
     m[0]*e+m[2]*f+m[4], m[1]*e+m[3]*f+m[5],
   ];
 
+  // operator list에서 각 이미지의 이름과 PDF 좌표계 bbox 수집
+  const items = [];
+  let ctm = [1,0,0,1,0,0];
+  const stack = [];
   for (let i = 0; i < opList.fnArray.length; i++) {
     const fn = opList.fnArray[i], args = opList.argsArray[i];
     if      (fn === OPS.save)      stack.push([...ctm]);
@@ -204,23 +205,55 @@ async function getImageRects(page) {
         [ctm[0]*x+ctm[2]*y+ctm[4], ctm[1]*x+ctm[3]*y+ctm[5]]);
       const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
       const r = { xMin:Math.min(...xs), xMax:Math.max(...xs),
-                  yMin:Math.min(...ys), yMax:Math.max(...ys) };
-      // 너무 얇은 선/배경 이미지 제거 (최소 40×40 PDF 단위)
-      if (r.xMax-r.xMin > 40 && r.yMax-r.yMin > 40) regions.push(r);
+                  yMin:Math.min(...ys), yMax:Math.max(...ys), name: args[0] };
+      if (r.xMax-r.xMin > 40 && r.yMax-r.yMin > 40) items.push(r);
     }
   }
+  if (!items.length) return [];
 
-  if (!regions.length) return [];
-  regions.sort((a,b) => a.yMin - b.yMin);
-  const merged = [];
-  for (const r of regions) {
-    const last = merged[merged.length-1];
-    if (last && r.yMin < last.yMax + 12) {
-      last.xMin=Math.min(last.xMin,r.xMin); last.xMax=Math.max(last.xMax,r.xMax);
-      last.yMin=Math.min(last.yMin,r.yMin); last.yMax=Math.max(last.yMax,r.yMax);
-    } else merged.push({...r});
+  // PDF 객체에서 픽셀 데이터 로드 (비동기 콜백 패턴)
+  const getObj = name => new Promise(resolve => {
+    try { page.objs.get(name, o => resolve(o)); }
+    catch { try { page.commonObjs.get(name, o => resolve(o)); } catch { resolve(null); } }
+  });
+
+  const results = [];
+  for (const item of items) {
+    const obj = await Promise.race([
+      getObj(item.name),
+      new Promise(r => setTimeout(() => r(null), 4000)),
+    ]);
+    if (!obj || !obj.data || !obj.width || !obj.height) continue;
+    const { width, height, data } = obj;
+    const ch = data.length / (width * height);
+
+    // 채널 수에 따라 RGBA로 변환
+    let rgba;
+    if (ch === 4) {
+      rgba = new Uint8ClampedArray(data.buffer || data);
+    } else if (ch === 3) {
+      rgba = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0; i < width * height; i++) {
+        rgba[i*4] = data[i*3]; rgba[i*4+1] = data[i*3+1];
+        rgba[i*4+2] = data[i*3+2]; rgba[i*4+3] = 255;
+      }
+    } else if (ch === 1) {
+      rgba = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0; i < width * height; i++) {
+        rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = data[i]; rgba[i*4+3] = 255;
+      }
+    } else continue;
+
+    const cv = document.createElement('canvas');
+    cv.width = width; cv.height = height;
+    cv.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
+    if (blob && blob.size > 1500) results.push({ ...item, blob });
   }
-  return merged;
+
+  // 페이지 상단(y 큰 쪽)부터 읽기 순서로 정렬
+  results.sort((a, b) => b.yMin - a.yMin);
+  return results;
 }
 
 const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
@@ -388,10 +421,10 @@ async function extractBlocks(pdf, onProgress) {
     const page = await pdf.getPage(p);
     const { width: pageW, height: pageH } = page.getViewport({ scale: 1 });
 
-    // 텍스트 + 이미지 rect 병렬 취득
-    const [content, imageRects] = await Promise.all([
+    // 텍스트 + 임베드 이미지 병렬 취득
+    const [content, embeds] = await Promise.all([
       page.getTextContent(),
-      getImageRects(page),
+      getEmbeddedImages(page),
     ]);
     let lines = groupIntoLines(content.items);
     lines = reorderColumns(lines, pageW);
@@ -403,45 +436,79 @@ async function extractBlocks(pdf, onProgress) {
 
     // 텍스트 없는 페이지 → 전체 그림
     if (lines.length === 0) {
-      const { cv } = await renderPageCanvas(page, 2.0);
-      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
-      if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
+      if (embeds.length) {
+        for (const img of embeds) blocks.push({ type: 'fig', blob: img.blob, caption: '' });
+      } else {
+        const { cv } = await renderPageCanvas(page, 2.0);
+        const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+        if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
+      }
       onProgress(p, pdf.numPages); continue;
     }
 
-    // 캡션 기반 그림/표 영역 감지
-    const { regions, usedCaps } = buildFigureRegions(lines, imageRects, pageW, pageH, bodySize);
+    if (embeds.length) {
+      // ── PDF 직접 추출 경로: 좌표 계산 없이 비트맵 그대로 삽입 ──
+      const captions  = lines.filter(l =>  CAPTION_RE.test(l.text));
+      const bodyLines = lines.filter(l => !CAPTION_RE.test(l.text)).sort((a, b) => b.y - a.y);
 
-    if (!regions.length) {
-      linesToBlocks(lines, bodySize, blocks);
-      onProgress(p, pdf.numPages); continue;
+      // 각 이미지에 가장 가까운 캡션 연결 (y 거리 기준)
+      const usedCaps = new Set();
+      for (const img of embeds) {
+        const mid = (img.yMin + img.yMax) / 2;
+        let best = null, bestD = Infinity;
+        for (const c of captions) {
+          const d = Math.abs(c.y + c.h / 2 - mid);
+          if (d < bestD && d < bodySize * 20 && !usedCaps.has(c)) { bestD = d; best = c; }
+        }
+        img.caption = best ? best.text : '';
+        if (best) usedCaps.add(best);
+      }
+
+      // 텍스트와 이미지를 y 순서(위→아래)로 인터리브
+      let ptr = 0;
+      for (const img of embeds) {
+        // 이 이미지 위의 본문 텍스트 출력
+        const seg = [];
+        while (ptr < bodyLines.length && bodyLines[ptr].y > img.yMax - bodySize * 0.5)
+          seg.push(bodyLines[ptr++]);
+        linesToBlocks(seg, bodySize, blocks);
+
+        // PDF에서 꺼낸 비트맵을 그대로 삽입
+        blocks.push({ type: 'fig', blob: img.blob, caption: img.caption });
+
+        // 이미지 bbox 내 텍스트 레이어(축 레이블 등) 건너뜀
+        while (ptr < bodyLines.length && bodyLines[ptr].y >= img.yMin - bodySize * 0.5)
+          ptr++;
+      }
+      linesToBlocks(bodyLines.slice(ptr), bodySize, blocks);
+
+    } else {
+      // ── 벡터 그림 폴백: 캡션 기반 캔버스 크롭 ──
+      const { regions, usedCaps } = buildFigureRegions(lines, [], pageW, pageH, bodySize);
+
+      if (!regions.length) {
+        linesToBlocks(lines, bodySize, blocks);
+        onProgress(p, pdf.numPages); continue;
+      }
+
+      const SCALE = 2.0;
+      const { cv } = await renderPageCanvas(page, SCALE);
+      const used = new Set(usedCaps);
+      const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
+      let ptr = 0;
+
+      for (const g of regions) {
+        const seg = [];
+        while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
+          seg.push(sortedLines[ptr++]);
+        linesToBlocks(seg, bodySize, blocks);
+        const blob = await cropCanvasRegion(cv, g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
+        if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
+        while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5)
+          ptr++;
+      }
+      linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
     }
-
-    const SCALE = 2.0;
-    const { cv } = await renderPageCanvas(page, SCALE);
-
-    // 캡션 줄은 본문 흐름에서 제외(그림 라벨로 따로 표시)
-    const used = new Set(usedCaps);
-    const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
-    let ptr = 0;
-
-    for (const g of regions) {
-      // 이 그림 위의 텍스트 라인
-      const seg = [];
-      while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
-        seg.push(sortedLines[ptr++]);
-      linesToBlocks(seg, bodySize, blocks);
-
-      // 그림 영역 캡처 (x0/x1로 좌우 여백 제거, 고해상도)
-      const blob = await cropCanvasRegion(cv, g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
-      if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
-
-      // 그림 내부 텍스트(축 레이블/표 셀) 건너뜀
-      while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5)
-        ptr++;
-    }
-    // 그림 아래 남은 텍스트
-    linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
 
     onProgress(p, pdf.numPages);
   }
