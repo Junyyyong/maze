@@ -225,6 +225,19 @@ async function getImageRects(page) {
 
 const CAPTION_RE = /^\s*(figure|fig\.?|table|tbl\.?|scheme|chart|algorithm|그림|표|도표|차트|알고리즘)\s*\.?\s*[\[\(<]?\s*\d/i;
 
+// TTS: 참고문헌 섹션 헤딩 감지 (여기서 자동 정지)
+const REFS_HEADING_RE = /^(references|bibliography|works\s+cited|참고\s*문헌|인용\s*문헌|문헌)$/i;
+
+// TTS: 본문 읽어주기 전 인용·URL 등 노이즈 제거
+function cleanForTts(text) {
+  return text
+    .replace(/\[\d[\d,;\s–\-]*\]/g, '')              // [1], [1,2], [1–3]
+    .replace(/\([A-Z][^)]{0,60}\d{4}[a-z]?\)/g, '')  // (Smith et al., 2024)
+    .replace(/https?:\/\/\S+/g, '')                   // URLs
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
   const captions = lines.filter(l => CAPTION_RE.test(l.text));
   const body     = lines.filter(l => l.h >= bodySize * 0.65 && !CAPTION_RE.test(l.text));
@@ -726,6 +739,7 @@ function closeBook() {
   currentBook = null;
   $('readerView').hidden  = true;
   $('hlPanel').hidden     = true;
+  $('tocPanel').hidden    = true;
   xlClose();
   $('libraryView').hidden = false;
   renderLibrary();
@@ -867,6 +881,39 @@ function deleteHighlight() {
 
 function closeNotePopup() { $('notePopup').hidden = true; editingHlId = null; }
 
+function renderTocPanel() {
+  const list = $('tocPanelList');
+  list.innerHTML = '';
+  if (!currentBook) return;
+  const headings = currentBook.blocks
+    .map((b, i) => ({ ...b, idx: i }))
+    .filter(b => b.type === 'h2' || b.type === 'h3');
+  if (!headings.length) {
+    list.innerHTML = '<div class="hl-empty">이 문서에서 목차를 찾지 못했어요.</div>';
+    return;
+  }
+  for (const h of headings) {
+    const item = document.createElement('div');
+    item.className = 'toc-item toc-' + h.type;
+    item.textContent = h.text;
+    item.onclick = () => {
+      $('tocPanel').hidden = true;
+      const el = $('readerContent').querySelector(`.blk[data-idx="${h.idx}"]`);
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); $('readerContent').scrollBy(0, -8); }
+    };
+    list.appendChild(item);
+  }
+}
+
+function toggleTocPanel() {
+  const tp = $('tocPanel');
+  $('fontPanel').hidden  = true;
+  $('themePanel').hidden = true;
+  $('hlPanel').hidden    = true;
+  tp.hidden = !tp.hidden;
+  if (!tp.hidden) renderTocPanel();
+}
+
 function renderHlPanel() {
   const list = $('hlPanelList');
   list.innerHTML = '';
@@ -980,7 +1027,7 @@ function xlSaveAsMemo() {
 
 /* ===================== TTS ===================== */
 
-const TTS_RATES = [0.8, 1.0, 1.2, 1.5, 2.0];
+const TTS_RATES = [0.8, 1.0, 1.2, 1.5, 2.0, 2.5];
 let ttsRateIdx  = 1;
 const tts = { active: false, paused: false, blockIdx: 0 };
 
@@ -991,6 +1038,12 @@ function ttsPlayBlock(idx) {
   // 그림 블록은 건너뜀
   if (currentBook.blocks[idx].type === 'fig') { ttsPlayBlock(idx + 1); return; }
 
+  // 참고문헌 헤딩에서 자동 정지
+  const block = currentBook.blocks[idx];
+  if ((block.type === 'h2' || block.type === 'h3') && REFS_HEADING_RE.test(block.text.trim())) {
+    ttsStop(); return;
+  }
+
   tts.active = true; tts.paused = false; tts.blockIdx = idx;
 
   $('readerContent').querySelectorAll('.blk.tts-active').forEach(el => el.classList.remove('tts-active'));
@@ -1000,10 +1053,11 @@ function ttsPlayBlock(idx) {
     blkEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  const text  = currentBook.blocks[idx].text;
-  const utter = new SpeechSynthesisUtterance(text);
+  const rawText  = block.text;
+  const spokenText = block.type === 'p' ? (cleanForTts(rawText) || rawText) : rawText;
+  const utter = new SpeechSynthesisUtterance(spokenText);
   utter.rate  = TTS_RATES[ttsRateIdx];
-  utter.lang  = detectLang(text) === 'ko' ? 'ko-KR' : 'en-US';
+  utter.lang  = detectLang(rawText) === 'ko' ? 'ko-KR' : 'en-US';
   utter.onend   = () => { if (tts.active && !tts.paused) ttsPlayBlock(idx + 1); };
   utter.onerror = e => { if (e.error !== 'interrupted') ttsPlayBlock(idx + 1); };
   window.speechSynthesis.speak(utter);
@@ -1072,8 +1126,11 @@ $('fontBtn').onclick      = toggleFontPanel;
 $('themePickBtn').onclick = toggleThemePanel;
 $('ttsBtn').onclick       = ttsStart;
 $('xlParaBtn').onclick    = xlTranslateParagraph;
+$('tocBtn').onclick       = toggleTocPanel;
+$('tocPanelClose').onclick = () => ($('tocPanel').hidden = true);
 $('hlListBtn').onclick    = () => {
   const p = $('hlPanel');
+  $('tocPanel').hidden = true;
   p.hidden = !p.hidden;
   if (!p.hidden) renderHlPanel();
 };

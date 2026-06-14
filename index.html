@@ -76,6 +76,11 @@
           <path d="M12 6h7M15.5 4v2M21 16l-5.5-5.5M15.5 10.5c0 3.6-3 6.5-6.5 6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
         </svg>
       </button>
+      <button id="tocBtn" class="tb-btn" aria-label="목차">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <path d="M2.5 6h3.5M2.5 11h3.5M2.5 16h3.5M8 6h11.5M8 11h11.5M8 16h8.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
       <button id="hlListBtn"    class="tb-btn" aria-label="하이라이트">
         <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
           <rect x="2.5" y="10" width="17" height="3.5" rx="1.75" fill="var(--hl-solid)" opacity=".85"/>
@@ -117,6 +122,15 @@
       </button>
     </div>
   </div>
+
+  <!-- 목차 패널 -->
+  <aside id="tocPanel" class="side-panel" hidden>
+    <div class="panel-head">
+      <strong>목차</strong>
+      <button id="tocPanelClose" class="icon-btn">✕</button>
+    </div>
+    <div id="tocPanelList" class="panel-list"></div>
+  </aside>
 
   <!-- 하이라이트 패널 -->
   <aside id="hlPanel" class="side-panel" hidden>

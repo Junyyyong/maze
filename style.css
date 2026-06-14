@@ -878,6 +878,21 @@ mark.hl.has-note { border-bottom: 2.5px solid var(--hl-border); }
 .hl-item .n { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
 .hl-empty { color: var(--muted); font-size: 13px; padding: 20px 4px; text-align: center; line-height: 1.7; }
 
+/* ── 목차 패널 ─────────────────────────────── */
+
+.toc-item {
+  padding: 9px 6px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  line-height: 1.45;
+  border-radius: 4px;
+  transition: background .12s;
+  color: var(--fg);
+}
+.toc-item:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.toc-h2 { font-size: 13.5px; font-weight: 600; }
+.toc-h3 { font-size: 13px; padding-left: 18px; color: var(--fg2); }
+
 /* ── 로딩 오버레이 ──────────────────────────── */
 
 .overlay {
