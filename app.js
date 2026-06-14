@@ -466,6 +466,124 @@ async function renderPageCanvas(page, scale = 1.5) {
   return { cv, vp };
 }
 
+/* ── YOLO DocLayNet 레이아웃 분석 ───────────────────── */
+
+let _ortSession = null;
+let _ortLoadPromise = null;
+
+async function loadOrtSession() {
+  if (_ortSession) return _ortSession;
+  if (!_ortLoadPromise) {
+    _ortLoadPromise = (async () => {
+      try {
+        if (typeof ort === 'undefined') return null;
+        ort.env.wasm.wasmPaths = './vendor/';
+        ort.env.wasm.numThreads = 1;
+        const session = await ort.InferenceSession.create('./vendor/doclaynet-yolo.onnx', {
+          executionProviders: ['wasm'],
+        });
+        _ortSession = session;
+        return session;
+      } catch (e) {
+        console.warn('YOLO 모델 로드 실패:', e);
+        return null;
+      }
+    })();
+  }
+  return _ortLoadPromise;
+}
+
+function _iouBox(a, b) {
+  const ix0 = Math.max(a.x0, b.x0), iy0 = Math.max(a.y0, b.y0);
+  const ix1 = Math.min(a.x1, b.x1), iy1 = Math.min(a.y1, b.y1);
+  const inter = Math.max(0, ix1-ix0) * Math.max(0, iy1-iy0);
+  const aA = (a.x1-a.x0)*(a.y1-a.y0), bA = (b.x1-b.x0)*(b.y1-b.y0);
+  return inter / (aA + bA - inter + 1e-9);
+}
+
+function _nms(boxes, iouThresh) {
+  boxes.sort((a, b) => b.score - a.score);
+  const sup = new Uint8Array(boxes.length);
+  const keep = [];
+  for (let i = 0; i < boxes.length; i++) {
+    if (sup[i]) continue;
+    keep.push(boxes[i]);
+    for (let j = i+1; j < boxes.length; j++) {
+      if (!sup[j] && boxes[j].cls === boxes[i].cls && _iouBox(boxes[i], boxes[j]) > iouThresh)
+        sup[j] = 1;
+    }
+  }
+  return keep;
+}
+
+// 페이지를 YOLO로 분석해 그림·표 영역을 PDF 좌표로 반환
+// 반환: [{x0,x1,yLo,yHi,images:[]}] | null (모델 없을 때)
+async function detectLayoutRegions(page, pageW, pageH) {
+  const session = await loadOrtSession();
+  if (!session) return null;
+
+  const DSCALE = 1.5;
+  const { cv } = await renderPageCanvas(page, DSCALE);
+
+  const SZ = 1024;
+  const sc = Math.min(SZ / cv.width, SZ / cv.height);
+  const nw = Math.round(cv.width * sc), nh = Math.round(cv.height * sc);
+  const px = Math.floor((SZ - nw) / 2), py = Math.floor((SZ - nh) / 2);
+
+  const lb = document.createElement('canvas');
+  lb.width = lb.height = SZ;
+  const lbCtx = lb.getContext('2d');
+  lbCtx.fillStyle = 'rgb(114,114,114)';
+  lbCtx.fillRect(0, 0, SZ, SZ);
+  lbCtx.drawImage(cv, 0, 0, cv.width, cv.height, px, py, nw, nh);
+  const pix = lbCtx.getImageData(0, 0, SZ, SZ).data;
+
+  const N = SZ * SZ;
+  const inp = new Float32Array(3 * N);
+  for (let i = 0; i < N; i++) {
+    inp[i]       = pix[i*4]   / 255;
+    inp[N + i]   = pix[i*4+1] / 255;
+    inp[2*N + i] = pix[i*4+2] / 255;
+  }
+
+  let raw;
+  try {
+    const out = await session.run({ images: new ort.Tensor('float32', inp, [1, 3, SZ, SZ]) });
+    raw = out['output0'].data;
+  } catch (e) {
+    console.warn('YOLO 추론 실패:', e);
+    return null;
+  }
+
+  // output [1,15,21504]: ch0~3=bbox, ch4~14=class scores (DocLayNet 11 classes)
+  const AN = 21504;
+  const PIC = 6, TBL = 8, CONF = 0.25;
+
+  const cands = [];
+  for (let i = 0; i < AN; i++) {
+    let mx = 0, mc = -1;
+    for (let c = 0; c < 11; c++) {
+      const s = raw[(4+c)*AN + i];
+      if (s > mx) { mx = s; mc = c; }
+    }
+    if (mx < CONF || (mc !== PIC && mc !== TBL)) continue;
+    const cx = raw[i], cy = raw[AN+i], w = raw[2*AN+i], h = raw[3*AN+i];
+    cands.push({
+      x0: ((cx-w/2)-px)/sc, y0: ((cy-h/2)-py)/sc,
+      x1: ((cx+w/2)-px)/sc, y1: ((cy+h/2)-py)/sc,
+      score: mx, cls: mc,
+    });
+  }
+
+  return _nms(cands, 0.45).map(b => ({
+    x0:  Math.max(0, b.x0 / DSCALE),
+    x1:  Math.min(pageW, b.x1 / DSCALE),
+    yHi: Math.min(pageH, pageH - b.y0 / DSCALE),
+    yLo: Math.max(0, pageH - b.y1 / DSCALE),
+    images: [],
+  })).filter(r => r.yHi > r.yLo && r.x1 > r.x0);
+}
+
 /* ── extractBlocks ─────────────────────────────── */
 
 async function extractBlocks(pdf, onProgress) {
@@ -495,10 +613,14 @@ async function extractBlocks(pdf, onProgress) {
       l.text.length > 80 ||
       CAPTION_RE.test(l.text));
 
-    // 텍스트를 경계로 이미지를 그림 영역으로 클러스터링
-    const figRegions = imageRects.length
-      ? clusterFigures(imageRects, lines, bodySize)
-      : [];
+    // YOLO 레이아웃 감지 → 실패·미감지 시 기존 휴리스틱으로 폴백
+    let figRegions;
+    const yoloRegions = await detectLayoutRegions(page, pageW, pageH).catch(() => null);
+    if (yoloRegions && yoloRegions.length > 0) {
+      figRegions = yoloRegions;
+    } else {
+      figRegions = imageRects.length ? clusterFigures(imageRects, lines, bodySize) : [];
+    }
 
     const SCALE = 2.5;
     let pageCanvas = null;
@@ -506,7 +628,7 @@ async function extractBlocks(pdf, onProgress) {
 
     // 한 그림 영역을 blob으로: 단일 래스터면 직접 추출(최고화질), 다중/복합이면 캔버스 크롭
     const regionToBlob = async (g) => {
-      if (g.images.length === 1) {
+      if (g.images && g.images.length === 1) {
         const blob = await extractImageBlob(page, g.images[0].name);
         if (blob) return blob;
       }
@@ -1420,3 +1542,6 @@ if (navigator.storage && navigator.storage.persist) {
 
 // DB를 미리 열어 첫 PDF 추가 시 연결 지연 방지
 openDB().catch(() => {});
+
+// YOLO 레이아웃 분석 모델 선행 로딩 (백그라운드)
+loadOrtSession().catch(() => {});
