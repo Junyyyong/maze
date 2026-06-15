@@ -581,7 +581,8 @@ async function detectLayoutRegions(page, pageW, pageH) {
     yHi: Math.min(pageH, pageH - b.y0 / DSCALE),
     yLo: Math.max(0, pageH - b.y1 / DSCALE),
     images: [],
-  })).filter(r => r.yHi > r.yLo && r.x1 > r.x0);
+  })).filter(r => r.yHi > r.yLo && r.x1 > r.x0)
+    .sort((a, b) => b.yHi - a.yHi); // 위→아래 정렬 (인터리빙 전제)
 }
 
 /* ── extractBlocks ─────────────────────────────── */
