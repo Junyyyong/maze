@@ -2,7 +2,7 @@
    - 앱 셸(html/css/js)은 network-first: 온라인이면 항상 최신 코드를 받고,
      오프라인일 때만 캐시로 폴백한다. (배포 후 핸드폰이 옛 코드를 쓰는 문제 방지)
    - 용량 큰 PDF.js 라이브러리는 cache-first로 빠르게 로드한다. */
-const CACHE = 'paper-shelf-v17';
+const CACHE = 'paper-shelf-v18';
 
 const SHELL = [
   './',

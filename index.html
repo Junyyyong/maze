@@ -18,6 +18,7 @@
     <header class="lib-header">
       <div class="lib-brand">Paper Shelf</div>
       <div class="lib-actions">
+        <button id="installBtn" class="btn-install" title="앱 설치" hidden>⬇ 앱 설치</button>
         <button id="libThemeBtn" class="theme-cycle-btn" title="테마 변경">📖</button>
         <button id="einkBtn" class="theme-cycle-btn" title="e-ink 모드" style="font-size:15px;letter-spacing:-0.5px">E</button>
         <label class="btn-add" for="fileInput">+ PDF 추가</label>
@@ -185,6 +186,20 @@
   <div id="figZoomModal" class="fig-zoom-modal" hidden>
     <button class="fig-zoom-close" onclick="figZoomClose()" aria-label="닫기">✕</button>
     <img id="figZoomImg" class="fig-zoom-img" src="" alt="">
+  </div>
+
+  <!-- iOS 앱 설치 안내 -->
+  <div id="iosInstallModal" class="overlay" hidden>
+    <div class="overlay-box install-box">
+      <div class="install-title">홈 화면에 추가</div>
+      <p class="install-desc">이 앱을 홈 화면에 추가하면 일반 앱처럼 전체화면으로 쓸 수 있어요.</p>
+      <ol class="install-steps">
+        <li>화면 아래(또는 위)의 <b>공유 버튼 <span class="ios-share">􀈂</span></b>을 누르세요.</li>
+        <li>메뉴를 내려 <b>“홈 화면에 추가”</b>를 누르세요.</li>
+        <li>오른쪽 위 <b>“추가”</b>를 누르면 끝!</li>
+      </ol>
+      <button id="iosInstallClose" class="btn-add" style="width:100%;justify-content:center">알겠어요</button>
+    </div>
   </div>
 
   <!-- 로딩 오버레이 -->

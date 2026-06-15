@@ -1546,3 +1546,55 @@ openDB().catch(() => {});
 
 // YOLO 레이아웃 분석 모델 선행 로딩 (백그라운드)
 loadOrtSession().catch(() => {});
+
+/* ===================== 앱 설치(PWA) ===================== */
+
+// 이미 홈 화면 앱(standalone)으로 실행 중인지
+function isStandalone() {
+  return window.matchMedia?.('(display-mode: standalone)').matches ||
+         window.navigator.standalone === true;
+}
+
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS
+
+let deferredInstallPrompt = null;
+const installBtn = $('installBtn');
+
+// 안드로이드/크롬: 설치 가능 시점에 이벤트를 잡아 버튼 노출
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if (!isStandalone() && installBtn) installBtn.hidden = false;
+});
+
+// iOS 사파리는 beforeinstallprompt가 없음 → 설치 안 된 상태면 버튼 직접 노출
+if (isIOS && !isStandalone() && installBtn) installBtn.hidden = false;
+
+if (installBtn) {
+  installBtn.onclick = async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice.catch(() => {});
+      deferredInstallPrompt = null;
+      installBtn.hidden = true;
+    } else if (isIOS) {
+      $('iosInstallModal').hidden = false; // iOS 수동 설치 안내
+    } else {
+      // 이미 설치됐거나 조건 미충족
+      alert('이미 설치되었거나, 브라우저 메뉴에서 "홈 화면에 추가"로 설치할 수 있어요.');
+    }
+  };
+}
+
+const iosClose = $('iosInstallClose');
+if (iosClose) iosClose.onclick = () => ($('iosInstallModal').hidden = true);
+$('iosInstallModal')?.addEventListener('click', e => {
+  if (e.target.id === 'iosInstallModal') e.currentTarget.hidden = true;
+});
+
+// 설치 완료 시 버튼 숨김
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  if (installBtn) installBtn.hidden = true;
+});
