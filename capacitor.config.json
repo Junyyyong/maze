@@ -1,0 +1,23 @@
+{
+  "appId": "com.papershelf.app",
+  "appName": "Paper Shelf",
+  "webDir": ".",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "backgroundColor": "#F2E8D5",
+    "preferredContentMode": "mobile"
+  },
+  "android": {
+    "backgroundColor": "#F2E8D5",
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DEFAULT",
+      "backgroundColor": "#F2E8D5"
+    }
+  }
+}
