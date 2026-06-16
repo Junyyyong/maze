@@ -211,43 +211,6 @@ async function getImageRects(page) {
   return rects;
 }
 
-// 임베드 이미지 한 개의 픽셀을 꺼내 JPEG blob으로 변환 (직접 추출, 최고 화질)
-async function extractImageBlob(page, name) {
-  const getObj = nm => new Promise(resolve => {
-    try { page.objs.get(nm, o => resolve(o)); }
-    catch { try { page.commonObjs.get(nm, o => resolve(o)); } catch { resolve(null); } }
-  });
-  const obj = await Promise.race([
-    getObj(name),
-    new Promise(r => setTimeout(() => r(null), 4000)),
-  ]);
-  if (!obj || !obj.data || !obj.width || !obj.height) return null;
-  const { width, height, data } = obj;
-  const ch = data.length / (width * height);
-
-  let rgba;
-  if (ch === 4) {
-    rgba = new Uint8ClampedArray(data.buffer || data);
-  } else if (ch === 3) {
-    rgba = new Uint8ClampedArray(width * height * 4);
-    for (let i = 0; i < width * height; i++) {
-      rgba[i*4] = data[i*3]; rgba[i*4+1] = data[i*3+1];
-      rgba[i*4+2] = data[i*3+2]; rgba[i*4+3] = 255;
-    }
-  } else if (ch === 1) {
-    rgba = new Uint8ClampedArray(width * height * 4);
-    for (let i = 0; i < width * height; i++) {
-      rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = data[i]; rgba[i*4+3] = 255;
-    }
-  } else return null;
-
-  const cv = document.createElement('canvas');
-  cv.width = width; cv.height = height;
-  cv.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
-  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.88));
-  return blob && blob.size > 1500 ? blob : null;
-}
-
 // 이미지 bbox 목록을 그림 영역으로 클러스터링
 // 규칙: ① 같은 x열 (30%+ 가로 겹침) 내에서만 병합 → 다른 단 이미지 혼입 방지
 //       ② 이미지 사이에 본문 텍스트가 있으면 별개 그림으로 분리
@@ -442,19 +405,24 @@ function buildFigureRegions(lines, rasterRects, pageW, pageH, bodySize) {
   return { regions: merged, usedCaps };
 }
 
+// PDF 좌표(yTop/yBottom/xMin/xMax)를 캔버스에서 잘라 JPEG blob으로
+// 박스 크기 대비 비율 패딩(3%)으로 테두리·표 마지막 행/열·캡션 잘림 방지
 function cropCanvasRegion(canvas, pdfYTop, pdfYBottom, pdfXMin, pdfXMax, pageH, scale) {
-  const padX = Math.round(10 * scale);
-  const padY = Math.round(12 * scale);
-  const cx = Math.max(0, Math.floor(pdfXMin * scale) - padX);
-  const cw = Math.min(canvas.width - cx, Math.ceil((pdfXMax - pdfXMin) * scale) + padX * 2);
-  const cy = Math.max(0, Math.floor((pageH - pdfYTop) * scale) - padY);
-  const ch = Math.min(canvas.height - cy, Math.ceil((pdfYTop - pdfYBottom) * scale) + padY * 2);
-  if (ch < 30 || cw < 30) return Promise.resolve(null);
+  const w = pdfXMax - pdfXMin, h = pdfYTop - pdfYBottom;
+  if (w <= 0 || h <= 0) return Promise.resolve(null);
+  const padX = w * 0.03, padY = h * 0.03;
+  const x0   = Math.max(0, pdfXMin - padX);
+  const yTop = pdfYTop + padY;
+  const cx = Math.max(0, Math.round(x0 * scale));
+  const cw = Math.min(canvas.width - cx,  Math.round((Math.min(pdfXMax + padX, canvas.width / scale) - x0) * scale));
+  const cy = Math.max(0, Math.round((pageH - yTop) * scale));
+  const ch = Math.min(canvas.height - cy, Math.round((h + padY * 2) * scale));
+  if (ch < 24 || cw < 24) return Promise.resolve(null);
   return new Promise(res => {
     const tmp = document.createElement('canvas');
     tmp.width = cw; tmp.height = ch;
     tmp.getContext('2d').drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
-    tmp.toBlob(b => res(b && b.size > 1500 ? b : null), 'image/jpeg', 0.88);
+    tmp.toBlob(b => res(b && b.size > 1500 ? b : null), 'image/jpeg', 0.9);
   });
 }
 
@@ -516,18 +484,23 @@ function _nms(boxes, iouThresh) {
   return keep;
 }
 
-// 페이지를 YOLO로 분석해 그림·표 영역을 PDF 좌표로 반환
-// 반환: [{x0,x1,yLo,yHi,images:[]}] | null (모델 없을 때)
-async function detectLayoutRegions(page, pageW, pageH) {
+// DocLayNet 클래스 인덱스
+const DLN = {
+  CAPTION: 0, FOOTNOTE: 1, FORMULA: 2, LIST: 3, PFOOT: 4,
+  PHEAD: 5, PICTURE: 6, SECTION: 7, TABLE: 8, TEXT: 9, TITLE: 10,
+};
+const DLN_FIG = new Set([DLN.PICTURE, DLN.TABLE, DLN.FORMULA]);
+
+// 이미 렌더된 캔버스를 YOLO로 분석해 모든 클래스 박스를 PDF 좌표로 반환
+// box: { x0, x1, yLo, yHi, cls, score }  (yHi=위, yLo=아래 / PDF 좌표)
+// 반환 [] 또는 null(모델 없음). 기본적으로 Page-header/footer는 제외.
+async function detectLayout(canvas, pageW, pageH, renderScale, opts = {}) {
   const session = await loadOrtSession();
   if (!session) return null;
 
-  const DSCALE = 1.5;
-  const { cv } = await renderPageCanvas(page, DSCALE);
-
   const SZ = 1024;
-  const sc = Math.min(SZ / cv.width, SZ / cv.height);
-  const nw = Math.round(cv.width * sc), nh = Math.round(cv.height * sc);
+  const sc = Math.min(SZ / canvas.width, SZ / canvas.height);
+  const nw = Math.round(canvas.width * sc), nh = Math.round(canvas.height * sc);
   const px = Math.floor((SZ - nw) / 2), py = Math.floor((SZ - nh) / 2);
 
   const lb = document.createElement('canvas');
@@ -535,7 +508,7 @@ async function detectLayoutRegions(page, pageW, pageH) {
   const lbCtx = lb.getContext('2d');
   lbCtx.fillStyle = 'rgb(114,114,114)';
   lbCtx.fillRect(0, 0, SZ, SZ);
-  lbCtx.drawImage(cv, 0, 0, cv.width, cv.height, px, py, nw, nh);
+  lbCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, px, py, nw, nh);
   const pix = lbCtx.getImageData(0, 0, SZ, SZ).data;
 
   const N = SZ * SZ;
@@ -555,37 +528,230 @@ async function detectLayoutRegions(page, pageW, pageH) {
     return null;
   }
 
-  // output [1,15,21504]: ch0~3=bbox, ch4~14=class scores (DocLayNet 11 classes)
+  // output [1,15,21504]: ch0~3=cx,cy,w,h, ch4~14=클래스 점수 11개
   const AN = 21504;
-  const PIC = 6, TBL = 8, CONF = 0.25;
+  const CONF = 0.2; // 검출률 위해 낮춤
+  const exclude = new Set(opts.includeHeaderFooter ? [] : [DLN.PHEAD, DLN.PFOOT]);
+
+  const toPageX = lbx => ((lbx - px) / sc) / renderScale;
+  const toPageYTop = lby => pageH - ((lby - py) / sc) / renderScale;
 
   const cands = [];
   for (let i = 0; i < AN; i++) {
     let mx = 0, mc = -1;
     for (let c = 0; c < 11; c++) {
-      const s = raw[(4+c)*AN + i];
+      const s = raw[(4 + c) * AN + i];
       if (s > mx) { mx = s; mc = c; }
     }
-    if (mx < CONF || (mc !== PIC && mc !== TBL)) continue;
-    const cx = raw[i], cy = raw[AN+i], w = raw[2*AN+i], h = raw[3*AN+i];
+    if (mx < CONF || exclude.has(mc)) continue;
+    const cx = raw[i], cy = raw[AN + i], w = raw[2*AN + i], h = raw[3*AN + i];
     cands.push({
-      x0: ((cx-w/2)-px)/sc, y0: ((cy-h/2)-py)/sc,
-      x1: ((cx+w/2)-px)/sc, y1: ((cy+h/2)-py)/sc,
+      x0: toPageX(cx - w/2),  x1: toPageX(cx + w/2),
+      // 캔버스 y는 위에서 아래로 증가 → PDF y로 뒤집기
+      yHi: toPageYTop(cy - h/2), yLo: toPageYTop(cy + h/2),
       score: mx, cls: mc,
     });
   }
 
-  return _nms(cands, 0.45).map(b => ({
-    x0:  Math.max(0, b.x0 / DSCALE),
-    x1:  Math.min(pageW, b.x1 / DSCALE),
-    yHi: Math.min(pageH, pageH - b.y0 / DSCALE),
-    yLo: Math.max(0, pageH - b.y1 / DSCALE),
-    images: [],
-  })).filter(r => r.yHi > r.yLo && r.x1 > r.x0)
-    .sort((a, b) => b.yHi - a.yHi); // 위→아래 정렬 (인터리빙 전제)
+  // NMS용 임시 x0/y0/x1/y1 부여 후 정리
+  for (const b of cands) { b.y0 = -b.yHi; b.y1 = -b.yLo; }
+  return _nms(cands, 0.5).map(b => ({
+    x0: Math.max(0, b.x0), x1: Math.min(pageW, b.x1),
+    yHi: Math.min(pageH, b.yHi), yLo: Math.max(0, b.yLo),
+    cls: b.cls, score: b.score,
+  })).filter(r => r.yHi > r.yLo && r.x1 > r.x0);
+}
+
+/* ── reading-order (하이브리드) ─────────────────────── */
+
+const boxArea     = b => Math.max(0, b.x1 - b.x0) * Math.max(0, b.yHi - b.yLo);
+const boxCenterX  = b => (b.x0 + b.x1) / 2;
+const boxCenterY  = b => (b.yLo + b.yHi) / 2;
+const boxCDist    = (a, b) =>
+  Math.hypot(boxCenterX(a) - boxCenterX(b), boxCenterY(a) - boxCenterY(b));
+
+// 라인(텍스트 줄)을 박스에 배정: 포함(가장 작은 박스 우선) → 임계 내 최근접 → 폐기
+function assignLineToBox(l, boxesSmallFirst, bodySize) {
+  const lcx = (l.x0 + l.x1) / 2, lcy = l.y + l.h / 2;
+  for (const b of boxesSmallFirst) {
+    if (lcx >= b.x0 && lcx <= b.x1 && lcy >= b.yLo && lcy <= b.yHi) { b.lines.push(l); return; }
+  }
+  let best = null, bd = Infinity;
+  for (const b of boxesSmallFirst) {
+    const dx = Math.max(b.x0 - lcx, 0, lcx - b.x1);
+    const dy = Math.max(b.yLo - lcy, 0, lcy - b.yHi);
+    const d = Math.hypot(dx, dy);
+    if (d < bd) { bd = d; best = b; }
+  }
+  if (best && bd < bodySize * 3) best.lines.push(l); // 멀면(머리/꼬리말 등) 폐기
+}
+
+// 한 밴드 내부를 컬럼(좌→우)으로 나누고 각 컬럼 위→아래로 정렬
+function orderBandByColumns(band) {
+  const cols = [];
+  for (const b of [...band].sort((p, q) => p.x0 - q.x0)) {
+    let best = null, bestR = 0;
+    for (const c of cols) {
+      const ov = Math.max(0, Math.min(b.x1, c.x1) - Math.max(b.x0, c.x0));
+      const sp = Math.min(b.x1 - b.x0, c.x1 - c.x0);
+      const r = sp > 0 ? ov / sp : 0;
+      if (r > bestR && r >= 0.5) { best = c; bestR = r; }
+    }
+    if (best) { best.x0 = Math.min(best.x0, b.x0); best.x1 = Math.max(best.x1, b.x1); best.items.push(b); }
+    else cols.push({ x0: b.x0, x1: b.x1, items: [b] });
+  }
+  cols.sort((a, b) => a.x0 - b.x0);
+  const out = [];
+  for (const c of cols) { c.items.sort((a, b) => b.yHi - a.yHi); out.push(...c.items); }
+  return out;
+}
+
+// 하이브리드 읽기 순서: 전폭 박스를 구분선으로 밴드 분할 →
+// 각 밴드를 컬럼 좌→우, 컬럼 내 위→아래로 정렬
+function orderReadingOrder(boxes, contentX0, contentX1) {
+  const contentW = Math.max(1, contentX1 - contentX0);
+  const isFull = b => (b.x1 - b.x0) > contentW * 0.62;
+  const sorted = [...boxes].sort((a, b) => b.yHi - a.yHi); // 위→아래
+  const result = [];
+  let band = [];
+  const flush = () => { if (band.length) { result.push(...orderBandByColumns(band)); band = []; } };
+  for (const b of sorted) {
+    if (isFull(b)) { flush(); result.push(b); }
+    else band.push(b);
+  }
+  flush();
+  return result;
 }
 
 /* ── extractBlocks ─────────────────────────────── */
+
+// 텍스트 박스 한 개를 블록으로: 클래스→타입 매핑
+function emitTextBox(box, bodySize, blocks) {
+  const ls = (box.lines || []).sort((a, b) => b.y - a.y); // 위→아래
+  if (!ls.length) return;
+  const text = ls.map(l => l.text).join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  if (box.cls === DLN.TITLE) { blocks.push({ type: 'h1', text }); return; }
+  if (box.cls === DLN.SECTION) {
+    const h = Math.max(...ls.map(l => l.h));
+    blocks.push({ type: h > bodySize * 1.4 ? 'h2' : 'h3', text });
+    return;
+  }
+  // Text / List-item / Footnote / 미사용 Caption → 단락 분리
+  linesToBlocks(ls, bodySize, blocks);
+}
+
+// YOLO 레이아웃 박스 기반 페이지 처리 (reading-order 통합)
+async function emitYoloPage(layout, rawLines, pageW, pageH, bodySize, cropScale, getHiCanvas, blocks) {
+  const figBoxes  = layout.filter(b => DLN_FIG.has(b.cls));
+  const capBoxes  = layout.filter(b => b.cls === DLN.CAPTION);
+  const textBoxes = layout.filter(b => !DLN_FIG.has(b.cls) && b.cls !== DLN.CAPTION);
+
+  // 라인 배정 (텍스트+캡션 박스 / 작은 박스 우선)
+  const targets = [...textBoxes, ...capBoxes].sort((a, b) => boxArea(a) - boxArea(b));
+  for (const b of targets) b.lines = [];
+  for (const l of rawLines) assignLineToBox(l, targets, bodySize);
+
+  // 캡션 텍스트 구성
+  for (const cb of capBoxes)
+    cb.text = (cb.lines || []).sort((a, b) => b.y - a.y).map(l => l.text).join(' ').replace(/\s+/g, ' ').trim();
+
+  // 그림에 최근접 캡션 연결
+  for (const fb of figBoxes) {
+    let best = null, bd = Infinity;
+    for (const cb of capBoxes) {
+      if (cb.used || !cb.text) continue;
+      const d = boxCDist(fb, cb);
+      if (d < bd && d < bodySize * 30) { bd = d; best = cb; }
+    }
+    fb.caption = best ? best.text : '';
+    if (best) best.used = true;
+  }
+
+  // 읽기 순서 정렬 (미사용 캡션은 본문 단락으로 포함)
+  const contentBoxes = [...textBoxes, ...figBoxes, ...capBoxes.filter(c => !c.used)];
+  const ref = textBoxes.length ? textBoxes : contentBoxes;
+  const cX0 = ref.length ? Math.min(...ref.map(b => b.x0)) : 0;
+  const cX1 = ref.length ? Math.max(...ref.map(b => b.x1)) : pageW;
+  const ordered = orderReadingOrder(contentBoxes, cX0, cX1);
+
+  for (const b of ordered) {
+    if (DLN_FIG.has(b.cls)) {
+      const blob = await cropCanvasRegion(await getHiCanvas(), b.yHi, b.yLo, b.x0, b.x1, pageH, cropScale);
+      if (blob) blocks.push({ type: 'fig', blob, caption: b.caption || '' });
+    } else {
+      emitTextBox(b, bodySize, blocks);
+    }
+  }
+}
+
+// 모델 미사용 시 폴백: 기존 휴리스틱 (reorderColumns + 캡션/이미지 클러스터)
+async function emitFallbackPage(page, rawLines, pageW, pageH, bodySize, cropScale, getHiCanvas, blocks) {
+  const imageRects = await getImageRects(page);
+  let lines = reorderColumns(rawLines, pageW);
+  lines = lines.filter(l =>
+    (l.y >= bodySize * 3 && l.y <= pageH - bodySize * 2) ||
+    l.text.length > 80 || CAPTION_RE.test(l.text));
+
+  const figRegions = imageRects.length ? clusterFigures(imageRects, lines, bodySize) : [];
+
+  if (lines.length === 0) {
+    if (figRegions.length) {
+      for (const g of figRegions) {
+        const blob = await cropCanvasRegion(await getHiCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, cropScale);
+        if (blob) blocks.push({ type: 'fig', blob, caption: '' });
+      }
+    } else {
+      const cv = await getHiCanvas();
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+      if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
+    }
+    return;
+  }
+
+  if (figRegions.length) {
+    const captions  = lines.filter(l =>  CAPTION_RE.test(l.text));
+    const bodyLines = lines.filter(l => !CAPTION_RE.test(l.text)).sort((a, b) => b.y - a.y);
+    const usedCaps = new Set();
+    for (const g of figRegions) {
+      const mid = (g.yLo + g.yHi) / 2;
+      let best = null, bestD = Infinity;
+      for (const c of captions) {
+        const d = Math.abs(c.y + c.h / 2 - mid);
+        if (d < bestD && d < bodySize * 20 && !usedCaps.has(c)) { bestD = d; best = c; }
+      }
+      g.caption = best ? best.text : '';
+      if (best) usedCaps.add(best);
+    }
+    let ptr = 0;
+    for (const g of figRegions) {
+      const seg = [];
+      while (ptr < bodyLines.length && bodyLines[ptr].y > g.yHi - bodySize * 0.5)
+        seg.push(bodyLines[ptr++]);
+      linesToBlocks(seg, bodySize, blocks);
+      const blob = await cropCanvasRegion(await getHiCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, cropScale);
+      if (blob) blocks.push({ type: 'fig', blob, caption: g.caption });
+      while (ptr < bodyLines.length && bodyLines[ptr].y >= g.yLo - bodySize * 0.5) ptr++;
+    }
+    linesToBlocks(bodyLines.slice(ptr), bodySize, blocks);
+  } else {
+    const { regions, usedCaps } = buildFigureRegions(lines, [], pageW, pageH, bodySize);
+    if (!regions.length) { linesToBlocks(lines, bodySize, blocks); return; }
+    const used = new Set(usedCaps);
+    const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
+    let ptr = 0;
+    for (const g of regions) {
+      const seg = [];
+      while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
+        seg.push(sortedLines[ptr++]);
+      linesToBlocks(seg, bodySize, blocks);
+      const blob = await cropCanvasRegion(await getHiCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, cropScale);
+      if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
+      while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5) ptr++;
+    }
+    linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
+  }
+}
 
 async function extractBlocks(pdf, onProgress) {
   const blocks = [], sizes = [];
@@ -600,116 +766,22 @@ async function extractBlocks(pdf, onProgress) {
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const { width: pageW, height: pageH } = page.getViewport({ scale: 1 });
+    const rawLines = groupIntoLines((await page.getTextContent()).items);
 
-    // 텍스트 + 이미지 bbox 병렬 취득
-    const [content, imageRects] = await Promise.all([
-      page.getTextContent(),
-      getImageRects(page),
-    ]);
-    let lines = groupIntoLines(content.items);
-    lines = reorderColumns(lines, pageW);
-    // 페이지 꼬리말(하단)/머리말(상단) 제거: 짧은 라인만 필터 (실제 본문은 유지)
-    lines = lines.filter(l =>
-      (l.y >= bodySize * 3 && l.y <= pageH - bodySize * 2) ||
-      l.text.length > 80 ||
-      CAPTION_RE.test(l.text));
+    // 탐지용 렌더(중간 해상도) — 모든 페이지에서 YOLO 입력으로 사용
+    const DET_SCALE = Math.min(2.0, 4000 / Math.max(pageW, pageH));
+    const detCanvas = (await renderPageCanvas(page, DET_SCALE)).cv;
+    const layout = await detectLayout(detCanvas, pageW, pageH, DET_SCALE).catch(() => null);
 
-    // YOLO 레이아웃 감지 → 실패·미감지 시 기존 휴리스틱으로 폴백
-    let figRegions;
-    const yoloRegions = await detectLayoutRegions(page, pageW, pageH).catch(() => null);
-    if (yoloRegions && yoloRegions.length > 0) {
-      figRegions = yoloRegions;
+    // 그림 크롭용 고해상도 렌더(그림 있을 때만 지연 생성)
+    const CROP_SCALE = Math.min(3.5, 5000 / Math.max(pageW, pageH));
+    let hiCanvas = null;
+    const getHiCanvas = async () => (hiCanvas ??= (await renderPageCanvas(page, CROP_SCALE)).cv);
+
+    if (layout && layout.length) {
+      await emitYoloPage(layout, rawLines, pageW, pageH, bodySize, CROP_SCALE, getHiCanvas, blocks);
     } else {
-      figRegions = imageRects.length ? clusterFigures(imageRects, lines, bodySize) : [];
-    }
-
-    const SCALE = 2.5;
-    let pageCanvas = null;
-    const getCanvas = async () => (pageCanvas ??= (await renderPageCanvas(page, SCALE)).cv);
-
-    // 한 그림 영역을 blob으로: 단일 래스터면 직접 추출(최고화질), 다중/복합이면 캔버스 크롭
-    const regionToBlob = async (g) => {
-      if (g.images && g.images.length === 1) {
-        const blob = await extractImageBlob(page, g.images[0].name);
-        if (blob) return blob;
-      }
-      return cropCanvasRegion(await getCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
-    };
-
-    // 텍스트 없는 페이지 → 그림만
-    if (lines.length === 0) {
-      if (figRegions.length) {
-        for (const g of figRegions) {
-          const blob = await regionToBlob(g);
-          if (blob) blocks.push({ type: 'fig', blob, caption: '' });
-        }
-      } else {
-        const { cv } = await renderPageCanvas(page, 2.0);
-        const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
-        if (blob && blob.size > 2000) blocks.push({ type: 'fig', blob });
-      }
-      onProgress(p, pdf.numPages); continue;
-    }
-
-    if (figRegions.length) {
-      // ── 그래픽 영역 기반 경로 ──
-      const captions  = lines.filter(l =>  CAPTION_RE.test(l.text));
-      const bodyLines = lines.filter(l => !CAPTION_RE.test(l.text)).sort((a, b) => b.y - a.y);
-
-      // 각 영역에 가장 가까운 캡션 연결 (y 거리 기준)
-      const usedCaps = new Set();
-      for (const g of figRegions) {
-        const mid = (g.yLo + g.yHi) / 2;
-        let best = null, bestD = Infinity;
-        for (const c of captions) {
-          const d = Math.abs(c.y + c.h / 2 - mid);
-          if (d < bestD && d < bodySize * 20 && !usedCaps.has(c)) { bestD = d; best = c; }
-        }
-        g.caption = best ? best.text : '';
-        if (best) usedCaps.add(best);
-      }
-
-      // 텍스트와 그림을 y 순서(위→아래)로 인터리브
-      let ptr = 0;
-      for (const g of figRegions) {
-        const seg = [];
-        while (ptr < bodyLines.length && bodyLines[ptr].y > g.yHi - bodySize * 0.5)
-          seg.push(bodyLines[ptr++]);
-        linesToBlocks(seg, bodySize, blocks);
-
-        const blob = await regionToBlob(g);
-        if (blob) blocks.push({ type: 'fig', blob, caption: g.caption });
-
-        // 그림 영역 내부 텍스트(축 레이블/표 셀) 건너뜀
-        while (ptr < bodyLines.length && bodyLines[ptr].y >= g.yLo - bodySize * 0.5)
-          ptr++;
-      }
-      linesToBlocks(bodyLines.slice(ptr), bodySize, blocks);
-
-    } else {
-      // ── 벡터 전용 그림 폴백: 캡션 기반 캔버스 크롭 ──
-      const { regions, usedCaps } = buildFigureRegions(lines, [], pageW, pageH, bodySize);
-
-      if (!regions.length) {
-        linesToBlocks(lines, bodySize, blocks);
-        onProgress(p, pdf.numPages); continue;
-      }
-
-      const used = new Set(usedCaps);
-      const sortedLines = lines.filter(l => !used.has(l)).sort((a, b) => b.y - a.y);
-      let ptr = 0;
-
-      for (const g of regions) {
-        const seg = [];
-        while (ptr < sortedLines.length && sortedLines[ptr].y > g.yHi - bodySize * 0.5)
-          seg.push(sortedLines[ptr++]);
-        linesToBlocks(seg, bodySize, blocks);
-        const blob = await cropCanvasRegion(await getCanvas(), g.yHi, g.yLo, g.x0, g.x1, pageH, SCALE);
-        if (blob) blocks.push({ type: 'fig', blob, caption: g.caption || '' });
-        while (ptr < sortedLines.length && sortedLines[ptr].y >= g.yLo - bodySize * 0.5)
-          ptr++;
-      }
-      linesToBlocks(sortedLines.slice(ptr), bodySize, blocks);
+      await emitFallbackPage(page, rawLines, pageW, pageH, bodySize, CROP_SCALE, getHiCanvas, blocks);
     }
 
     onProgress(p, pdf.numPages);
@@ -1171,7 +1243,7 @@ function renderTocPanel() {
   if (!currentBook) return;
   const headings = currentBook.blocks
     .map((b, i) => ({ ...b, idx: i }))
-    .filter(b => b.type === 'h2' || b.type === 'h3');
+    .filter(b => b.type === 'h1' || b.type === 'h2' || b.type === 'h3');
   if (!headings.length) {
     list.innerHTML = '<div class="hl-empty">이 문서에서 목차를 찾지 못했어요.</div>';
     return;
